@@ -6,11 +6,13 @@ import { enqueueAnalysis } from '../jobs/queue'
 function buildTusServer(fastify: FastifyInstance) {
   const store = new S3Store({
     s3ClientConfig: {
-      bucket: process.env.S3_BUCKET!,
-      region: process.env.AWS_REGION!,
+      bucket: process.env.R2_BUCKET!,
+      // R2 requires region "auto" and a custom endpoint
+      region: 'auto',
+      endpoint: `https://${process.env.R2_ACCOUNT_ID!}.r2.cloudflarestorage.com`,
       credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+        accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
       },
     },
   })
