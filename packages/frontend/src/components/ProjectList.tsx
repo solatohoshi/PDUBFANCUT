@@ -1,0 +1,64 @@
+import { useEffect, useState } from 'react'
+import { api } from '../lib/api'
+import type { Project } from '../lib/api'
+
+const STATUS_COLOR: Record<Project['status'], string> = {
+  uploading:  '#a0a0b0',
+  processing: '#f0a020',
+  ready:      '#40d080',
+  failed:     '#f05060',
+}
+
+interface Props {
+  token: string
+  refreshSignal?: number
+}
+
+export function ProjectList({ token, refreshSignal }: Props) {
+  const [projects, setProjects] = useState<Project[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    api.listProjects(token)
+      .then(setProjects)
+      .catch(console.error)
+      .finally(() => setLoading(false))
+  }, [token, refreshSignal])
+
+  if (loading) return <p style={styles.hint}>Loading projects…</p>
+  if (!projects.length) return <p style={styles.hint}>No projects yet — upload a file to get started.</p>
+
+  return (
+    <div style={styles.list}>
+      {projects.map((p) => (
+        <div key={p.id} style={styles.row}>
+          <div style={styles.info}>
+            <span style={styles.name}>{p.name}</span>
+            <span style={styles.meta}>
+              {p.analysis_mode === 'full' ? 'Full analysis' : 'Quick search'} ·{' '}
+              {new Date(p.created_at).toLocaleDateString()}
+            </span>
+          </div>
+          <span style={{ ...styles.badge, color: STATUS_COLOR[p.status] }}>
+            {p.status}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  list: { display: 'flex', flexDirection: 'column', gap: 8 },
+  row: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '12px 16px', background: '#111128', borderRadius: 8,
+    border: '1px solid #1e1e30',
+  },
+  info: { display: 'flex', flexDirection: 'column', gap: 2 },
+  name: { fontSize: 14, fontWeight: 600, color: '#e0e0f0' },
+  meta: { fontSize: 12, color: '#6060a0' },
+  badge: { fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' },
+  hint: { fontSize: 14, color: '#5050a0', textAlign: 'center', padding: '24px 0' },
+}
