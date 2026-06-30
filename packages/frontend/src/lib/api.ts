@@ -1,9 +1,8 @@
 const BASE = '/api'
 
-async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(init?.headers as Record<string, string> | undefined),
   }
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
@@ -30,10 +29,10 @@ export interface CreateProjectPayload {
 }
 
 export const api = {
-  createProject: (payload: CreateProjectPayload, token: string) =>
-    request<Project>('/projects', { method: 'POST', body: JSON.stringify(payload) }, token),
+  createProject: (payload: CreateProjectPayload) =>
+    request<Project>('/projects', { method: 'POST', body: JSON.stringify(payload) }),
 
-  listProjects: (token: string) => request<Project[]>('/projects', {}, token),
+  listProjects: () => request<Project[]>('/projects'),
 
-  getProject: (id: string, token: string) => request<Project>(`/projects/${id}`, {}, token),
+  getProject: (id: string) => request<Project>(`/projects/${id}`),
 }

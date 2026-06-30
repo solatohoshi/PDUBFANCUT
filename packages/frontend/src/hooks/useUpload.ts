@@ -7,7 +7,7 @@ export type UploadPhase = 'idle' | 'creating' | 'uploading' | 'processing' | 'do
 
 export interface UploadState {
   phase: UploadPhase
-  progress: number       // 0–100
+  progress: number
   projectId: string | null
   error: string | null
   bytesUploaded: number
@@ -25,7 +25,7 @@ const INITIAL: UploadState = {
   speedBytesPerSec: 0,
 }
 
-export function useUpload(token: string) {
+export function useUpload() {
   const [state, setState] = useState<UploadState>(INITIAL)
 
   const reset = useCallback(() => setState(INITIAL), [])
@@ -36,10 +36,7 @@ export function useUpload(token: string) {
 
       let projectId: string
       try {
-        const project = await api.createProject(
-          { name: file.name, ...projectMeta },
-          token
-        )
+        const project = await api.createProject({ name: file.name, ...projectMeta })
         projectId = project.id
       } catch (err: any) {
         setState((s) => ({ ...s, phase: 'error', error: err.message }))
@@ -54,20 +51,18 @@ export function useUpload(token: string) {
       const upload = new tus.Upload(file, {
         endpoint: '/api/upload',
         retryDelays: [0, 3000, 5000, 10000, 20000],
-        chunkSize: 50 * 1024 * 1024, // 50 MB chunks
+        chunkSize: 50 * 1024 * 1024,
         metadata: {
           filename: file.name,
           filetype: file.type,
           projectid: projectId,
         },
-        headers: { Authorization: `Bearer ${token}` },
         onProgress(bytesUploaded, bytesTotal) {
           const now = Date.now()
           const elapsed = (now - lastTime) / 1000
           const speed = elapsed > 0 ? (bytesUploaded - lastBytes) / elapsed : 0
           lastBytes = bytesUploaded
           lastTime = now
-
           setState((s) => ({
             ...s,
             bytesUploaded,
@@ -89,7 +84,7 @@ export function useUpload(token: string) {
         upload.start()
       })
     },
-    [token]
+    []
   )
 
   return { state, startUpload, reset }

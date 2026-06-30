@@ -10,23 +10,22 @@ const STATUS_COLOR: Record<Project['status'], string> = {
 }
 
 interface Props {
-  token: string
   refreshSignal?: number
 }
 
-export function ProjectList({ token, refreshSignal }: Props) {
+export function ProjectList({ refreshSignal }: Props) {
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.listProjects(token)
+    api.listProjects()
       .then(setProjects)
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [token, refreshSignal])
+  }, [refreshSignal])
 
-  if (loading) return <p style={styles.hint}>Loading projects…</p>
+  if (loading) return <p style={styles.hint}>Loading…</p>
   if (!projects.length) return <p style={styles.hint}>No projects yet — upload a file to get started.</p>
 
   return (
