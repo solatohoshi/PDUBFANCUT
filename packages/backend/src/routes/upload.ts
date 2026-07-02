@@ -2,14 +2,16 @@ import type { FastifyInstance } from 'fastify'
 import { Server, EVENTS } from '@tus/server'
 import { S3Store } from '@tus/s3-store'
 import { enqueueAnalysis } from '../jobs/queue'
+import { seedStubClips } from './projects'
 
 function buildTusServer(fastify: FastifyInstance) {
   const store = new S3Store({
     s3ClientConfig: {
       bucket: process.env.R2_BUCKET!,
-      // R2 requires region "auto" and a custom endpoint
+      // R2 requires region "auto", a custom endpoint, and path-style URLs.
       region: 'auto',
       endpoint: `https://${process.env.R2_ACCOUNT_ID!}.r2.cloudflarestorage.com`,
+      forcePathStyle: true,
       credentials: {
         accessKeyId: process.env.R2_ACCESS_KEY_ID!,
         secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
@@ -79,6 +81,18 @@ function buildTusServer(fastify: FastifyInstance) {
 
       if (dedupRes.rows[0]) {
         const { source_project_id } = dedupRes.rows[0]
+        // Copy clips from the source project into this project
+        await fastify.pg.query(
+          `INSERT INTO clips
+             (project_id, source_file_id, timecode_in, timecode_out,
+              scene_tags, players, confidence, review_status)
+           SELECT $1, sf_new.id, c.timecode_in, c.timecode_out,
+                  c.scene_tags, c.players, c.confidence, c.review_status
+           FROM clips c
+           JOIN source_files sf_new ON sf_new.project_id = $1
+           WHERE c.project_id = $2`,
+          [projectId, source_project_id],
+        )
         await fastify.pg.query(
           `UPDATE projects
            SET status = 'ready', source_project_id = $2, updated_at = NOW()
@@ -103,23 +117,65 @@ function buildTusServer(fastify: FastifyInstance) {
         [projectId, analysis_mode === 'full' ? 'full_analysis' : 'quick_search']
       )
 
-      const bullmqId = await enqueueAnalysis({
-        projectId,
-        sourceFileId,
-        s3Key: upload.id,
-        analysisMode: analysis_mode,
-        quickSearchParams: quick_search_params ?? undefined,
-      })
-
-      await fastify.pg.query(
-        `UPDATE jobs SET bullmq_id = $2 WHERE id = $1`,
-        [jobRes.rows[0].id, bullmqId]
+      // Enqueue with a 5-second timeout so a blocked Redis doesn't stall the upload.
+      const enqueueTimeout = new Promise<never>((_, rej) =>
+        setTimeout(() => rej(new Error('queue timeout')), 5000)
       )
+      let bullmqId: string | undefined
+      try {
+        bullmqId = await Promise.race([
+          enqueueAnalysis({
+            projectId,
+            sourceFileId,
+            s3Key: upload.id,
+            analysisMode: analysis_mode,
+            quickSearchParams: quick_search_params ?? undefined,
+          }),
+          enqueueTimeout,
+        ])
+        await fastify.pg.query(
+          `UPDATE jobs SET bullmq_id = $2 WHERE id = $1`,
+          [jobRes.rows[0].id, bullmqId]
+        )
+      } catch (err: any) {
+        fastify.log.warn({ err: err.message }, 'Job enqueue failed — worker queue may be unavailable')
+      }
 
       await fastify.pg.query(
         `UPDATE projects SET status = 'processing', updated_at = NOW() WHERE id = $1`,
         [projectId]
       )
+
+      // Stub analysis: seed clips and mark ready after a simulated delay.
+      // Replace with a real GPU worker call when the AI pipeline is ready.
+      const stubDelayMs = 5000 + Math.random() * 5000
+      setTimeout(async () => {
+        try {
+          const sf = await fastify.pg.query(
+            `SELECT id FROM source_files WHERE tus_upload_id = $1`, [upload.id],
+          )
+          if (sf.rows[0]) {
+            await seedStubClips(fastify, projectId, sf.rows[0].id, false)
+          }
+          const latestJob = await fastify.pg.query(
+            `SELECT id FROM jobs WHERE project_id = $1 ORDER BY created_at DESC LIMIT 1`,
+            [projectId],
+          )
+          if (latestJob.rows[0]) {
+            await fastify.pg.query(
+              `UPDATE jobs SET status = 'completed', updated_at = NOW() WHERE id = $1`,
+              [latestJob.rows[0].id],
+            )
+          }
+          await fastify.pg.query(
+            `UPDATE projects SET status = 'ready', updated_at = NOW() WHERE id = $1`,
+            [projectId],
+          )
+          fastify.log.info({ projectId }, 'Stub analysis complete')
+        } catch (err: any) {
+          fastify.log.error({ err: err.message }, 'Stub analysis failed')
+        }
+      }, stubDelayMs)
 
       return { res }
     },

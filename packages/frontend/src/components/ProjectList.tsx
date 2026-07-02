@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { Project } from '../lib/api'
 
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export function ProjectList({ refreshSignal }: Props) {
+  const navigate = useNavigate()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -31,7 +33,14 @@ export function ProjectList({ refreshSignal }: Props) {
   return (
     <div style={styles.list}>
       {projects.map((p) => (
-        <div key={p.id} style={styles.row}>
+        <div
+          key={p.id}
+          style={{
+            ...styles.row,
+            cursor: p.status === 'ready' ? 'pointer' : 'default',
+          }}
+          onClick={() => p.status === 'ready' && navigate(`/projects/${p.id}`)}
+        >
           <div style={styles.info}>
             <span style={styles.name}>{p.name}</span>
             <span style={styles.meta}>
@@ -39,9 +48,12 @@ export function ProjectList({ refreshSignal }: Props) {
               {new Date(p.created_at).toLocaleDateString()}
             </span>
           </div>
-          <span style={{ ...styles.badge, color: STATUS_COLOR[p.status] }}>
-            {p.status}
-          </span>
+          <div style={styles.right}>
+            <span style={{ ...styles.badge, color: STATUS_COLOR[p.status] }}>
+              {p.status}
+            </span>
+            {p.status === 'ready' && <span style={styles.arrow}>→</span>}
+          </div>
         </div>
       ))}
     </div>
@@ -58,6 +70,8 @@ const styles: Record<string, React.CSSProperties> = {
   info: { display: 'flex', flexDirection: 'column', gap: 2 },
   name: { fontSize: 14, fontWeight: 600, color: '#e0e0f0' },
   meta: { fontSize: 12, color: '#6060a0' },
+  right: { display: 'flex', alignItems: 'center', gap: 12 },
   badge: { fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' },
+  arrow: { fontSize: 16, color: '#6c63ff' },
   hint: { fontSize: 14, color: '#5050a0', textAlign: 'center', padding: '24px 0' },
 }

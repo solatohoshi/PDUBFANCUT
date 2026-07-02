@@ -1,9 +1,11 @@
-import 'dotenv/config'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import { dbPlugin } from './plugins/db'
 import { uploadRoutes } from './routes/upload'
 import { projectRoutes } from './routes/projects'
+import { fileRoutes } from './routes/files'
+import { exportRoutes } from './routes/exports'
+import { clipRoutes } from './routes/clips'
 
 const fastify = Fastify({ logger: { level: 'info' } })
 
@@ -28,6 +30,9 @@ async function main() {
   await fastify.register(dbPlugin)
   await fastify.register(projectRoutes, { prefix: '/api' })
   await fastify.register(uploadRoutes, { prefix: '/api' })
+  await fastify.register(fileRoutes, { prefix: '/api' })
+  await fastify.register(exportRoutes, { prefix: '/api' })
+  await fastify.register(clipRoutes,   { prefix: '/api' })
 
   fastify.get('/healthz', async () => ({ ok: true }))
 

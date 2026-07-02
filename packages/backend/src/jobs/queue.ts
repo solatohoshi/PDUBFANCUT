@@ -1,8 +1,18 @@
 import { Queue } from 'bullmq'
 import IORedis from 'ioredis'
 
-export const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
+// Upstash blocks plain TCP (6379) in restricted networks; use TLS on 6380 instead.
+function buildRedisUrl(raw: string) {
+  if (raw.includes('.upstash.io') && raw.startsWith('redis://')) {
+    return raw.replace('redis://', 'rediss://').replace(':6379', ':6380')
+  }
+  return raw
+}
+
+const redisUrl = buildRedisUrl(process.env.REDIS_URL || 'redis://localhost:6379')
+export const connection = new IORedis(redisUrl, {
   maxRetriesPerRequest: null,
+  tls: redisUrl.startsWith('rediss://') ? {} : undefined,
 })
 
 export const analysisQueue = new Queue('analysis', { connection })

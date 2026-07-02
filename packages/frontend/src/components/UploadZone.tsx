@@ -1,6 +1,6 @@
 import { useRef, useState, useCallback } from 'react'
 
-const ACCEPTED = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/mxf', '']
+const ACCEPTED = new Set(['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/mxf'])
 const MAX_BYTES = 20 * 1024 * 1024 * 1024 // 20 GB
 
 interface Props {
@@ -16,6 +16,10 @@ export function UploadZone({ onFile, disabled }: Props) {
   const validate = useCallback((file: File) => {
     if (file.size > MAX_BYTES) {
       setError('File exceeds the 20 GB limit.')
+      return false
+    }
+    if (file.type && !ACCEPTED.has(file.type)) {
+      setError('Unsupported file type. Use MP4, MOV, MXF, or AVI.')
       return false
     }
     return true

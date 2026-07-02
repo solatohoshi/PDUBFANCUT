@@ -1,7 +1,9 @@
-import 'dotenv/config'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { Client } from 'pg'
+import { Client, neonConfig } from '@neondatabase/serverless'
+import ws from 'ws'
+
+neonConfig.webSocketConstructor = ws
 
 async function migrate() {
   const client = new Client({ connectionString: process.env.DATABASE_URL! })
