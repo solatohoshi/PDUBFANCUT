@@ -177,7 +177,7 @@ export function TimelineTrack({
       {activeId && (() => {
         const found = slots.find((s) => s.id === activeId)
         if (!found) return null
-        const { id: slotId, tcIn, tcOut, trimStart, trimEnd, label } = found
+        const { id: slotId, tcIn, tcOut, trimStart, trimEnd, label, speed } = found
         const origDur      = tcOut - tcIn
         const effectiveIn  = tcIn + trimStart
         const effectiveOut = tcOut - trimEnd
@@ -208,6 +208,15 @@ export function TimelineTrack({
               {(effectiveOut - effectiveIn).toFixed(1)}s
               {trimStart > 0 || trimEnd > 0 ? ` (of ${origDur.toFixed(1)}s)` : ''}
             </span>
+            <select
+              style={styles.tcSpeedSelect}
+              value={speed}
+              onChange={(e) => onUpdate(slotId, { speed: parseFloat(e.target.value) })}
+            >
+              {SPEEDS.map((s) => (
+                <option key={s} value={s}>{s}×</option>
+              ))}
+            </select>
           </div>
         )
       })()}
@@ -432,5 +441,10 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#0d0d1a', border: '1px solid #1e1e30',
     color: '#8080a0', fontSize: 10, padding: '1px 2px',
     borderRadius: 3, cursor: 'pointer', flexShrink: 0,
+  },
+  tcSpeedSelect: {
+    background: '#12102a', border: '1px solid #2a2a4a',
+    color: '#c0c0e8', fontSize: 11, padding: '2px 4px',
+    borderRadius: 4, cursor: 'pointer', marginLeft: 4,
   },
 }

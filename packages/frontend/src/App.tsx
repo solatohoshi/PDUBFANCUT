@@ -4,6 +4,7 @@ import { SignedIn, SignedOut, RedirectToSignIn, UserButton, useAuth } from '@cle
 import { HomePage } from './pages/HomePage'
 import { ProjectPage } from './pages/ProjectPage'
 import { EditorPage } from './pages/EditorPage'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { setAuthToken } from './lib/api'
 
 function TokenSync() {
@@ -34,11 +35,13 @@ export function App() {
 
       <SignedIn>
         <TokenSync />
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/projects/:id" element={<ProjectPage />} />
-          <Route path="/projects/:id/editor" element={<EditorPage />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/projects/:id" element={<ProjectPage />} />
+            <Route path="/projects/:id/editor" element={<EditorPage />} />
+          </Routes>
+        </ErrorBoundary>
       </SignedIn>
 
       <SignedOut>

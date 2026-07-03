@@ -22,6 +22,37 @@ const SCENE_LABEL: Record<string, string> = {
   celebration:  'CELEB',
 }
 
+const SCENE_ICON: Record<string, string> = {
+  goal:         '🚨',
+  save:         '🧤',
+  shot_on_goal: '🎯',
+  hit:          '💥',
+  faceoff:      '🏒',
+  scrum:        '⚡',
+  penalty:      '🚫',
+  celebration:  '🎉',
+}
+
+function makeThumbnail(tag: string, color: string, dur: number): string {
+  const icon  = SCENE_ICON[tag]  ?? '📹'
+  const label = SCENE_LABEL[tag] ?? 'CLIP'
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="280" height="120" viewBox="0 0 280 120">
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="${color}" stop-opacity="0.18"/>
+        <stop offset="100%" stop-color="#08081a" stop-opacity="1"/>
+      </linearGradient>
+    </defs>
+    <rect width="280" height="120" fill="#0d0d1a"/>
+    <rect width="280" height="120" fill="url(#bg)"/>
+    <text x="140" y="62" text-anchor="middle" dominant-baseline="middle" font-size="40">${icon}</text>
+    <text x="140" y="95" text-anchor="middle" font-family="monospace" font-size="11" fill="${color}" font-weight="700" letter-spacing="3">${label}</text>
+    <text x="140" y="111" text-anchor="middle" font-family="monospace" font-size="10" fill="#404060">${dur}s</text>
+    <rect x="0.5" y="0.5" width="279" height="119" fill="none" stroke="${color}" stroke-width="1" stroke-opacity="0.2" rx="6"/>
+  </svg>`
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`
+}
+
 function formatTimecode(secs: number): string {
   const h = Math.floor(secs / 3600)
   const m = Math.floor((secs % 3600) / 60)
@@ -52,6 +83,9 @@ export function ClipCard({ clip, selected, onToggle, onConfirm, onDismiss }: Pro
 
   const primaryTag   = clip.scene_tags[0]
   const primaryColor = primaryTag ? (SCENE_COLOR[primaryTag.tag] ?? '#6c63ff') : '#6c63ff'
+  const thumbSrc = clip.thumb_key
+    ? `/api/files/${clip.thumb_key}`
+    : makeThumbnail(primaryTag?.tag ?? '', primaryColor, dur)
 
   return (
     <div
@@ -62,6 +96,14 @@ export function ClipCard({ clip, selected, onToggle, onConfirm, onDismiss }: Pro
       }}
       onClick={onToggle}
     >
+      {/* Thumbnail */}
+      <img
+        src={thumbSrc}
+        alt=""
+        style={styles.thumb}
+        draggable={false}
+      />
+
       {/* Scene type badges */}
       <div style={styles.tags}>
         {clip.scene_tags.map((st) => (
@@ -171,6 +213,10 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     gap: 10,
     userSelect: 'none',
+  },
+  thumb: {
+    width: '100%', height: 112, objectFit: 'cover',
+    borderRadius: 5, display: 'block', flexShrink: 0,
   },
   tags: { display: 'flex', gap: 5, flexWrap: 'wrap' },
   sceneTag: {

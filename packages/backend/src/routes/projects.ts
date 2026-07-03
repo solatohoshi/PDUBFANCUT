@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { enqueueAnalysis } from '../jobs/queue'
+import { sendClipsReadyEmail } from '../lib/notify'
 
 export async function projectRoutes(fastify: FastifyInstance) {
   fastify.post<{
@@ -93,7 +94,7 @@ export async function projectRoutes(fastify: FastifyInstance) {
     '/projects/:id/full-analysis', async (req, reply) => {
     const { id } = req.params
     const proj = await fastify.pg.query(
-      `SELECT id, analysis_mode, status FROM projects WHERE id = $1`,
+      `SELECT id, name, analysis_mode, status, user_id FROM projects WHERE id = $1`,
       [id],
     )
     if (!proj.rows[0]) {
@@ -104,6 +105,7 @@ export async function projectRoutes(fastify: FastifyInstance) {
       reply.status(409).send({ error: 'Already running full analysis' })
       return
     }
+    const { name: projectName, user_id: projectUserId } = proj.rows[0]
 
     await fastify.pg.query(
       `UPDATE projects
@@ -137,6 +139,7 @@ export async function projectRoutes(fastify: FastifyInstance) {
         await fastify.pg.query(
           `UPDATE projects SET status = 'ready', updated_at = NOW() WHERE id = $1`, [id],
         )
+        await sendClipsReadyEmail({ log: fastify.log }, id, projectName, projectUserId)
       } catch (err: any) {
         fastify.log.error({ err: err.message }, 'Full analysis stub failed')
       }
@@ -159,12 +162,13 @@ export async function projectRoutes(fastify: FastifyInstance) {
     }
 
     const proj = await fastify.pg.query(
-      `SELECT id, quick_search_params FROM projects WHERE id = $1`, [id],
+      `SELECT id, name, quick_search_params, user_id FROM projects WHERE id = $1`, [id],
     )
     if (!proj.rows[0]) {
       reply.status(404).send({ error: 'Project not found' })
       return
     }
+    const { name: searchProjectName, user_id: searchUserId } = proj.rows[0]
 
     const existing = proj.rows[0].quick_search_params ?? { players: [], scenes: [] }
     const merged = {
@@ -203,6 +207,7 @@ export async function projectRoutes(fastify: FastifyInstance) {
         await fastify.pg.query(
           `UPDATE projects SET status = 'ready', updated_at = NOW() WHERE id = $1`, [id],
         )
+        await sendClipsReadyEmail({ log: fastify.log }, id, searchProjectName, searchUserId)
       } catch (err: any) {
         fastify.log.error({ err: err.message }, 'Add-search stub failed')
       }

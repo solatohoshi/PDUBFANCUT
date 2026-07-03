@@ -24,6 +24,7 @@
     "fastify": "^4.28.1",
     "fastify-plugin": "^4.5.1",
     "ioredis": "^5.4.1",
+    "resend": "^6.17.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {

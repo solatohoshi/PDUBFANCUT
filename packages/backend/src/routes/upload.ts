@@ -3,6 +3,7 @@ import { Server, EVENTS } from '@tus/server'
 import { S3Store } from '@tus/s3-store'
 import { enqueueAnalysis } from '../jobs/queue'
 import { seedStubClips } from './projects'
+import { sendClipsReadyEmail } from '../lib/notify'
 
 function buildTusServer(fastify: FastifyInstance) {
   const store = new S3Store({
@@ -137,10 +138,10 @@ function buildTusServer(fastify: FastifyInstance) {
 
       // No dedup hit — fetch analysis mode and enqueue job
       const projRes = await fastify.pg.query(
-        `SELECT analysis_mode, quick_search_params FROM projects WHERE id = $1`,
+        `SELECT analysis_mode, quick_search_params, name, user_id FROM projects WHERE id = $1`,
         [projectId]
       )
-      const { analysis_mode, quick_search_params } = projRes.rows[0]
+      const { analysis_mode, quick_search_params, name: projectName, user_id: userId } = projRes.rows[0]
 
       const jobRes = await fastify.pg.query(
         `INSERT INTO jobs (project_id, type, status)
@@ -204,6 +205,7 @@ function buildTusServer(fastify: FastifyInstance) {
             [projectId],
           )
           fastify.log.info({ projectId }, 'Stub analysis complete')
+          await sendClipsReadyEmail({ log: fastify.log }, projectId, projectName, userId)
         } catch (err: any) {
           fastify.log.error({ err: err.message }, 'Stub analysis failed')
         }
