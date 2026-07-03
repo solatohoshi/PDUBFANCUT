@@ -10,23 +10,30 @@ export async function projectRoutes(fastify: FastifyInstance) {
     }
   }>('/projects', async (req, reply) => {
     const { name, analysisMode, quickSearchParams } = req.body
+    const userId = req.userId ?? null
 
     const result = await fastify.pg.query(
-      `INSERT INTO projects (name, analysis_mode, quick_search_params)
-       VALUES ($1, $2, $3)
+      `INSERT INTO projects (name, analysis_mode, quick_search_params, user_id)
+       VALUES ($1, $2, $3, $4)
        RETURNING id, name, analysis_mode, status, created_at`,
-      [name, analysisMode, quickSearchParams ? JSON.stringify(quickSearchParams) : null]
+      [name, analysisMode, quickSearchParams ? JSON.stringify(quickSearchParams) : null, userId]
     )
 
     reply.status(201).send(result.rows[0])
   })
 
-  fastify.get('/projects', async (_req, reply) => {
-    const result = await fastify.pg.query(
-      `SELECT id, name, analysis_mode, status, created_at, updated_at
-       FROM projects
-       ORDER BY created_at DESC`
-    )
+  fastify.get('/projects', async (req, reply) => {
+    const userId = req.userId
+    const result = userId
+      ? await fastify.pg.query(
+          `SELECT id, name, analysis_mode, status, created_at, updated_at
+           FROM projects WHERE user_id = $1 ORDER BY created_at DESC`,
+          [userId],
+        )
+      : await fastify.pg.query(
+          `SELECT id, name, analysis_mode, status, created_at, updated_at
+           FROM projects ORDER BY created_at DESC`,
+        )
     reply.send(result.rows)
   })
 
@@ -40,8 +47,9 @@ export async function projectRoutes(fastify: FastifyInstance) {
        LEFT JOIN source_files sf ON sf.project_id = p.id
        LEFT JOIN jobs j ON j.project_id = p.id
        WHERE p.id = $1
+         AND (p.user_id = $2 OR p.user_id IS NULL OR $2 IS NULL)
        GROUP BY p.id`,
-      [req.params.id]
+      [req.params.id, req.userId ?? null]
     )
 
     if (!result.rows[0]) {

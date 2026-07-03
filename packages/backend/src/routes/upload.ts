@@ -23,12 +23,44 @@ function buildTusServer(fastify: FastifyInstance) {
     path: '/api/upload',
     datastore: store,
     respectForwardedHeaders: true,
-    // Validate incoming uploads: require projectId in metadata
+    // Validate incoming uploads: size, MIME type, extension, projectId
     onUploadCreate: async (_req, res, upload) => {
       const projectId = upload.metadata?.projectid
       if (!projectId) {
-        const err = { status_code: 400, body: 'Missing projectid in Upload-Metadata' }
-        throw err
+        throw { status_code: 400, body: 'Missing projectid in Upload-Metadata' }
+      }
+
+      // 20 GB hard cap
+      const MAX_BYTES = 20 * 1024 * 1024 * 1024
+      if (upload.size && upload.size > MAX_BYTES) {
+        throw { status_code: 413, body: 'File too large. Maximum size is 20 GB.' }
+      }
+
+      // MIME type allowlist
+      const ALLOWED_MIME = new Set([
+        'video/mp4', 'video/quicktime', 'video/x-msvideo',
+        'video/avi', 'video/mxf', 'video/x-matroska',
+      ])
+      const filetype = upload.metadata?.filetype ?? ''
+      if (filetype && !ALLOWED_MIME.has(filetype)) {
+        throw {
+          status_code: 415,
+          body: `Unsupported file type "${filetype}". Accepted: MP4, MOV, MXF, AVI.`,
+        }
+      }
+
+      // Extension allowlist
+      const ALLOWED_EXT = new Set(['.mp4', '.mov', '.mxf', '.avi', '.mkv'])
+      const filename = (upload.metadata?.filename ?? '').toLowerCase()
+      if (filename) {
+        const dot = filename.lastIndexOf('.')
+        const ext = dot >= 0 ? filename.slice(dot) : ''
+        if (!ALLOWED_EXT.has(ext)) {
+          throw {
+            status_code: 415,
+            body: `Unsupported file extension "${ext || '(none)'}". Accepted: .mp4, .mov, .mxf, .avi.`,
+          }
+        }
       }
 
       // Create source_file record

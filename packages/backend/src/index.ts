@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import { dbPlugin } from './plugins/db'
+import authPlugin from './plugins/auth'
 import { uploadRoutes } from './routes/upload'
 import { projectRoutes } from './routes/projects'
 import { fileRoutes } from './routes/files'
@@ -28,6 +29,7 @@ async function main() {
   })
 
   await fastify.register(dbPlugin)
+  await fastify.register(authPlugin)
   await fastify.register(projectRoutes, { prefix: '/api' })
   await fastify.register(uploadRoutes, { prefix: '/api' })
   await fastify.register(fileRoutes, { prefix: '/api' })

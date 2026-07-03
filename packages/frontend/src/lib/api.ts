@@ -1,10 +1,14 @@
 const BASE = '/api'
 
+let _authToken: string | null = null
+export function setAuthToken(token: string | null) { _authToken = token }
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(init?.headers as Record<string, string> | undefined),
   }
+  if (_authToken) headers['Authorization'] = `Bearer ${_authToken}`
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))

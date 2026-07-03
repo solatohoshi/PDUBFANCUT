@@ -8,10 +8,13 @@
     "migrate": "dotenv -e ../../.env -- tsx src/db/migrate.ts",
     "worker": "dotenv -e ../../.env -- tsx src/jobs/worker.ts",
     "test": "dotenv -e ../../.env -- tsx src/test-phase1.ts",
-    "test:phase2": "dotenv -e ../../.env -- tsx src/test-phase2.ts"
+    "test:phase2": "dotenv -e ../../.env -- tsx src/test-phase2.ts",
+    "test:phase3": "dotenv -e ../../.env -- tsx src/test-phase3.ts",
+    "test:phase4": "dotenv -e ../../.env -- tsx src/test-phase4.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.600.0",
+    "@clerk/backend": "^3.10.0",
     "@fastify/cors": "^9.0.1",
     "@neondatabase/serverless": "^1.1.0",
     "@tus/s3-store": "^1.4.0",

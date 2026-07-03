@@ -2,6 +2,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TABLE IF NOT EXISTS projects (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id             TEXT,
   name                TEXT NOT NULL,
   analysis_mode       TEXT NOT NULL CHECK (analysis_mode IN ('full', 'quick')),
   quick_search_params JSONB,
@@ -12,6 +13,16 @@ CREATE TABLE IF NOT EXISTS projects (
   created_at          TIMESTAMPTZ DEFAULT NOW(),
   updated_at          TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Add user_id to existing installations (idempotent)
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'projects' AND column_name = 'user_id'
+  ) THEN
+    ALTER TABLE projects ADD COLUMN user_id TEXT;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS source_files (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -75,6 +86,7 @@ CREATE TABLE IF NOT EXISTS exports (
 );
 
 CREATE INDEX IF NOT EXISTS exports_project_idx        ON exports(project_id);
+CREATE INDEX IF NOT EXISTS projects_user_id_idx      ON projects(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS projects_file_hash_idx    ON projects(file_hash) WHERE file_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS source_files_project_idx  ON source_files(project_id);
 CREATE INDEX IF NOT EXISTS jobs_project_idx          ON jobs(project_id);
