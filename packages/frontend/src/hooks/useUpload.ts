@@ -47,15 +47,26 @@ export function useUpload() {
 
       let lastBytes = 0
       let lastTime = Date.now()
+      const capturedId = projectId
 
       const upload = new tus.Upload(file, {
         endpoint: '/api/upload',
+        // Replace the default IndexedDB URL storage with a no-op so that stale
+        // fingerprints from previous sessions are never read back, preventing
+        // spurious "failed to resume upload" HEAD requests to dead upload URLs.
+        urlStorage: {
+          findUploadsByFingerprint: async () => [],
+          findAllUploads: async () => [],
+          removeUpload: async () => {},
+          addUpload: async () => '',
+        },
+        storeFingerprintForResuming: false,
         retryDelays: [0, 3000, 5000, 10000, 20000],
-        chunkSize: 50 * 1024 * 1024,
+        chunkSize: 5 * 1024 * 1024,
         metadata: {
           filename: file.name,
           filetype: file.type,
-          projectid: projectId,
+          projectid: capturedId,
         },
         onProgress(bytesUploaded, bytesTotal) {
           const now = Date.now()
@@ -75,16 +86,16 @@ export function useUpload() {
           setState((s) => ({ ...s, phase: 'processing', progress: 100 }))
         },
         onError(err) {
+          // Delete the orphaned project so it doesn't litter the project list
+          // with a permanent 'uploading' row. Best-effort — ignore failures.
+          api.deleteProject(capturedId).catch(() => {})
           setState((s) => ({ ...s, phase: 'error', error: err.message }))
         },
       })
 
-      upload.findPreviousUploads().then((prev) => {
-        if (prev.length > 0) upload.resumeFromPreviousUpload(prev[0])
-        upload.start()
-      })
+      upload.start()
     },
-    []
+    [],
   )
 
   return { state, startUpload, reset }

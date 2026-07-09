@@ -114,6 +114,9 @@ export const api = {
       body: JSON.stringify({ review_status }),
     }),
 
+  deleteProject: (projectId: string) =>
+    request<void>(`/projects/${projectId}`, { method: 'DELETE' }),
+
   upgradeToFullAnalysis: (projectId: string) =>
     request<{ message: string }>(`/projects/${projectId}/full-analysis`, {
       method: 'POST', body: '{}',
@@ -124,4 +127,10 @@ export const api = {
       `/projects/${projectId}/searches`,
       { method: 'POST', body: JSON.stringify(params) },
     ),
+
+  rethumb: (projectId: string) =>
+    request<{ message: string }>(`/projects/${projectId}/rethumb`, { method: 'POST', body: '{}' }),
+
+  reanalyze: (projectId: string) =>
+    request<{ message: string }>(`/projects/${projectId}/reanalyze`, { method: 'POST', body: '{}' }),
 }

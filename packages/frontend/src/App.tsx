@@ -1,23 +1,8 @@
-import { useEffect } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
-import { SignedIn, SignedOut, RedirectToSignIn, UserButton, useAuth } from '@clerk/clerk-react'
 import { HomePage } from './pages/HomePage'
 import { ProjectPage } from './pages/ProjectPage'
 import { EditorPage } from './pages/EditorPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { setAuthToken } from './lib/api'
-
-function TokenSync() {
-  const { getToken, isSignedIn } = useAuth()
-  useEffect(() => {
-    if (!isSignedIn) { setAuthToken(null); return }
-    const refresh = async () => setAuthToken(await getToken())
-    refresh()
-    const id = setInterval(refresh, 55_000)
-    return () => clearInterval(id)
-  }, [isSignedIn, getToken])
-  return null
-}
 
 export function App() {
   const navigate = useNavigate()
@@ -28,25 +13,15 @@ export function App() {
         <span style={styles.logo} onClick={() => navigate('/')}>
           PWHL Clip Studio
         </span>
-        <div style={styles.headerRight}>
-          <UserButton afterSignOutUrl="/" />
-        </div>
       </header>
 
-      <SignedIn>
-        <TokenSync />
-        <ErrorBoundary>
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/projects/:id" element={<ProjectPage />} />
-            <Route path="/projects/:id/editor" element={<EditorPage />} />
-          </Routes>
-        </ErrorBoundary>
-      </SignedIn>
-
-      <SignedOut>
-        <RedirectToSignIn />
-      </SignedOut>
+      <ErrorBoundary>
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/projects/:id" element={<ProjectPage />} />
+          <Route path="/projects/:id/editor" element={<EditorPage />} />
+        </Routes>
+      </ErrorBoundary>
     </div>
   )
 }
@@ -61,5 +36,4 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 20, fontWeight: 800, color: '#6c63ff',
     letterSpacing: '-0.02em', cursor: 'pointer',
   },
-  headerRight: { display: 'flex', alignItems: 'center' },
 }

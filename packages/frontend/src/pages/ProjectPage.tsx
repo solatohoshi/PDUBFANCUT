@@ -41,6 +41,11 @@ export function ProjectPage() {
   // Multi-select
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
+  // Track whether we've already kicked off thumbnail backfill for this project
+  const rethumbFired = useRef(false)
+
+  const [reanalyzing, setReanalyzing] = useState(false)
+
   // Add-search modal
   const [showAddSearch, setShowAddSearch]   = useState(false)
   const [searchPlayers, setSearchPlayers]   = useState('')
@@ -68,12 +73,30 @@ export function ProjectPage() {
     loadData()?.finally(() => setLoading(false))
   }, [id])
 
-  // Auto-refresh while processing
+  // Auto-refresh while uploading or processing
   useEffect(() => {
-    if (!id || project?.status !== 'processing') return
-    const timer = setInterval(loadData, 5000)
+    const active = project?.status === 'uploading' || project?.status === 'processing'
+    if (!id || !active) return
+    const timer = setInterval(loadData, 3000)
     return () => clearInterval(timer)
   }, [id, project?.status])
+
+  // When the project is ready and clips have no thumbnails, kick off backfill once
+  // then keep polling until thumbnails appear.
+  useEffect(() => {
+    if (!id || project?.status !== 'ready') return
+    const missingThumb = clips.some((c) => !c.thumb_key)
+    if (!missingThumb) return
+
+    if (!rethumbFired.current) {
+      rethumbFired.current = true
+      api.rethumb(id).catch(() => {})
+    }
+
+    // Poll every 5 s until all thumbnails are filled in
+    const timer = setInterval(loadData, 5000)
+    return () => clearInterval(timer)
+  }, [id, project?.status, clips])
 
   const filteredClips = useMemo(() => {
     let result = clips.filter((c) => {
@@ -114,6 +137,20 @@ export function ProjectPage() {
       const updated = await api.updateClipStatus(clipId, status)
       setClips((prev) => prev.map((c) => c.id === updated.id ? updated : c))
     } catch {}
+  }
+
+  async function handleReanalyze() {
+    if (!id || reanalyzing) return
+    setReanalyzing(true)
+    try {
+      await api.reanalyze(id)
+      setProject((p) => p ? { ...p, status: 'processing' } : p)
+      rethumbFired.current = false
+    } catch (e: any) {
+      alert(e.message)
+    } finally {
+      setReanalyzing(false)
+    }
   }
 
   async function handleUpgradeAnalysis() {
@@ -191,6 +228,16 @@ export function ProjectPage() {
             {clips.length > 0 && (
               <button style={styles.editorBtn} onClick={() => navigate(`/projects/${id}/editor`)}>
                 Open editor →
+              </button>
+            )}
+            {project.status === 'ready' && (
+              <button
+                style={{ ...styles.reanalyzeBtn, opacity: reanalyzing ? 0.5 : 1 }}
+                onClick={handleReanalyze}
+                disabled={reanalyzing}
+                title="Delete existing clips and re-run AI analysis with the corrected prompt"
+              >
+                {reanalyzing ? 'Starting…' : '↺ Re-analyze'}
               </button>
             )}
           </div>
@@ -465,6 +512,11 @@ const styles: Record<string, React.CSSProperties> = {
   editorBtn: {
     background: '#6c63ff', border: 'none', color: '#fff',
     fontSize: 11, fontWeight: 700, padding: '3px 10px',
+    borderRadius: 4, cursor: 'pointer',
+  },
+  reanalyzeBtn: {
+    background: 'none', border: '1px solid #3a3060', color: '#8878cc',
+    fontSize: 11, fontWeight: 600, padding: '3px 10px',
     borderRadius: 4, cursor: 'pointer',
   },
 

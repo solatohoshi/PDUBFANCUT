@@ -19,13 +19,24 @@ export function ProjectList({ refreshSignal }: Props) {
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
 
+  function fetchProjects() {
+    return api.listProjects().then(setProjects).catch(console.error)
+  }
+
   useEffect(() => {
     setLoading(true)
-    api.listProjects()
-      .then(setProjects)
-      .catch(console.error)
-      .finally(() => setLoading(false))
+    fetchProjects().finally(() => setLoading(false))
   }, [refreshSignal])
+
+  // Auto-poll every 3 s while any project is still uploading or processing
+  useEffect(() => {
+    const hasActive = projects.some(
+      (p) => p.status === 'uploading' || p.status === 'processing',
+    )
+    if (!hasActive) return
+    const timer = setInterval(fetchProjects, 3000)
+    return () => clearInterval(timer)
+  }, [projects])
 
   if (loading) return <p style={styles.hint}>Loading…</p>
   if (!projects.length) return <p style={styles.hint}>No projects yet — upload a file to get started.</p>

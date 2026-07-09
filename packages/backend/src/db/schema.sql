@@ -42,6 +42,34 @@ CREATE TABLE IF NOT EXISTS source_files (
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Add metadata columns to existing source_files installations (idempotent)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'source_files' AND column_name = 'tus_upload_id') THEN
+    ALTER TABLE source_files ADD COLUMN tus_upload_id TEXT;
+    -- UNIQUE index added separately (can't add inline in ALTER TABLE easily)
+    CREATE UNIQUE INDEX IF NOT EXISTS source_files_tus_upload_id_idx ON source_files(tus_upload_id) WHERE tus_upload_id IS NOT NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'source_files' AND column_name = 'status') THEN
+    ALTER TABLE source_files ADD COLUMN status TEXT NOT NULL DEFAULT 'uploading'
+      CHECK (status IN ('uploading', 'uploaded', 'failed'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'source_files' AND column_name = 'duration_secs') THEN
+    ALTER TABLE source_files ADD COLUMN duration_secs NUMERIC(10,3);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'source_files' AND column_name = 'codec') THEN
+    ALTER TABLE source_files ADD COLUMN codec TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'source_files' AND column_name = 'width') THEN
+    ALTER TABLE source_files ADD COLUMN width INT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'source_files' AND column_name = 'height') THEN
+    ALTER TABLE source_files ADD COLUMN height INT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'source_files' AND column_name = 'uploaded_at') THEN
+    ALTER TABLE source_files ADD COLUMN uploaded_at TIMESTAMPTZ;
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS jobs (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id  UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

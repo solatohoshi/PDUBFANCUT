@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { UploadZone } from '../components/UploadZone'
 import { UploadProgress } from '../components/UploadProgress'
 import { AnalysisModeSelector } from '../components/AnalysisModeSelector'
@@ -15,6 +15,15 @@ export function HomePage() {
     await startUpload(file, analysisParams)
     setRefreshSignal((n) => n + 1)
   }
+
+  // Refresh project list when upload finishes (success or failure).
+  // On error the hook deletes the orphaned project server-side, so we need
+  // a second refresh to remove it from the list.
+  useEffect(() => {
+    if (state.phase === 'error' || state.phase === 'processing') {
+      setRefreshSignal((n) => n + 1)
+    }
+  }, [state.phase])
 
   return (
     <main style={styles.main}>

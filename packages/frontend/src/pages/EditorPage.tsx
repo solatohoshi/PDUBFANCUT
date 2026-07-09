@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { ProjectDetail, Clip } from '../lib/api'
@@ -67,8 +67,10 @@ export function EditorPage() {
     persistCaptions(next)
   }
   const [libScene, setLibScene]       = useState('all')
+  const [libSearch, setLibSearch]     = useState('')
   const [initDone, setInitDone]       = useState(false)
   const [showExport, setShowExport]   = useState(false)
+  const previewRef = useRef<{ togglePlay: () => void }>(null)
 
   // Load project + clips
   useEffect(() => {
@@ -95,14 +97,56 @@ export function EditorPage() {
     setInitDone(true)
   }, [allClips])
 
+  // Auto-select the first slot so the preview shows immediately on page load
+  useEffect(() => {
+    if (!initDone || activeId !== null || timeline.slots.length === 0) return
+    setActiveId(timeline.slots[0].id)
+  }, [initDone, timeline.slots.length])
+
   const activeSlot = timeline.slots.find((s) => s.id === activeId) ?? null
 
-  // Clip library filtered list
+  // Keyboard shortcuts: Space = play/pause, Delete/Backspace = remove, ←/→ = step
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const isEditable = e.target instanceof HTMLInputElement
+        || e.target instanceof HTMLTextAreaElement
+        || e.target instanceof HTMLSelectElement
+      if (isEditable) return
+      if (e.key === ' ') {
+        e.preventDefault()
+        previewRef.current?.togglePlay()
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (!activeId) return
+        e.preventDefault()
+        timeline.removeSlot(activeId)
+        setActiveId(null)
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        const idx = timeline.slots.findIndex((s) => s.id === activeId)
+        if (idx > 0) setActiveId(timeline.slots[idx - 1].id)
+        else if (idx === -1 && timeline.slots.length > 0) setActiveId(timeline.slots[timeline.slots.length - 1].id)
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        const idx = timeline.slots.findIndex((s) => s.id === activeId)
+        if (idx >= 0 && idx < timeline.slots.length - 1) setActiveId(timeline.slots[idx + 1].id)
+        else if (idx === -1 && timeline.slots.length > 0) setActiveId(timeline.slots[0].id)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [activeId, timeline.slots, timeline.removeSlot])
+
+  // Clip library filtered list (scene + player search)
   const libraryClips = useMemo(() => {
-    return allClips.filter((c) =>
-      libScene === 'all' || c.scene_tags.some((st) => st.tag === libScene),
-    )
-  }, [allClips, libScene])
+    const q = libSearch.trim().toLowerCase()
+    return allClips.filter((c) => {
+      const sceneMatch = libScene === 'all' || c.scene_tags.some((st) => st.tag === libScene)
+      const searchMatch = q === '' || c.players.some(
+        (p) => p.jersey.toLowerCase().includes(q) || p.name.toLowerCase().includes(q),
+      )
+      return sceneMatch && searchMatch
+    })
+  }, [allClips, libScene, libSearch])
 
   const timelineClipIds = new Set(timeline.slots.map((s) => s.clipId))
 
@@ -159,7 +203,7 @@ export function EditorPage() {
 
         {/* Left: preview + timeline */}
         <div style={styles.leftCol}>
-          <PreviewPlayer clip={activeSlot} />
+          <PreviewPlayer ref={previewRef} clip={activeSlot} />
 
           <TimelineTrack
             slots={timeline.slots}
@@ -172,6 +216,10 @@ export function EditorPage() {
             }}
             onMove={timeline.moveSlot}
             onUpdate={timeline.updateSlot}
+            onDropClip={(clipId) => {
+              const clip = allClips.find((c) => c.id === clipId)
+              if (clip) timeline.addClip(clip)
+            }}
           />
 
           <CaptionTrack
@@ -198,6 +246,17 @@ export function EditorPage() {
           <div style={styles.libHeader}>
             <span style={styles.libTitle}>Clip library</span>
             <span style={styles.libCount}>{allClips.length} clips</span>
+          </div>
+
+          {/* Player search */}
+          <div style={styles.libSearchWrap}>
+            <input
+              type="text"
+              placeholder="Search by player name or #…"
+              value={libSearch}
+              onChange={(e) => setLibSearch(e.target.value)}
+              style={styles.libSearchInput}
+            />
           </div>
 
           {/* Scene filter */}
@@ -236,10 +295,16 @@ export function EditorPage() {
               return (
                 <div
                   key={clip.id}
+                  draggable={!inTimeline}
+                  onDragStart={(e) => {
+                    if (inTimeline) { e.preventDefault(); return }
+                    e.dataTransfer.setData('text/clip-id', clip.id)
+                    e.dataTransfer.effectAllowed = 'copy'
+                  }}
                   style={{
                     ...styles.libClip,
                     opacity: inTimeline ? 0.5 : 1,
-                    cursor: inTimeline ? 'default' : 'pointer',
+                    cursor: inTimeline ? 'default' : 'grab',
                     borderLeftColor: color,
                   }}
                   onClick={() => !inTimeline && timeline.addClip(clip)}
@@ -350,4 +415,10 @@ const styles: Record<string, React.CSSProperties> = {
   libDur: { fontSize: 10, color: '#505080' },
   inTimelineBadge: { marginLeft: 'auto', fontSize: 11, color: '#6c63ff', fontWeight: 700 },
   libTc: { fontSize: 10, color: '#404060', fontFamily: 'monospace' },
+  libSearchWrap: { padding: '6px 10px 4px', flexShrink: 0 },
+  libSearchInput: {
+    width: '100%', background: '#111128', border: '1px solid #1e1e30',
+    color: '#c0c0e0', fontSize: 11, padding: '5px 8px', borderRadius: 5,
+    outline: 'none', boxSizing: 'border-box' as const,
+  },
 }

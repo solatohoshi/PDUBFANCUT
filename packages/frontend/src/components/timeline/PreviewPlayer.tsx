@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState, useEffect, forwardRef, useImperativeHandle } from 'react'
 import type { TimelineClip } from '../../hooks/useTimeline'
 
 function formatTime(secs: number): string {
@@ -12,54 +12,110 @@ interface Props {
   clip: TimelineClip | null
 }
 
-export function PreviewPlayer({ clip }: Props) {
-  const videoRef  = useRef<HTMLVideoElement>(null)
+export const PreviewPlayer = forwardRef<{ togglePlay: () => void }, Props>(function PreviewPlayer({ clip }, ref) {
+  const videoRef   = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying]   = useState(false)
   const [current, setCurrent]   = useState(0)
   const [hasVideo, setHasVideo] = useState(false)
+  const [loadError, setLoadError] = useState(false)
 
-  const clipStart = clip ? clip.tcIn + clip.trimStart : 0
-  const clipEnd   = clip ? clip.tcOut - clip.trimEnd  : 0
+  // Keep latest clip values in refs so event-listener callbacks never go stale
+  const clipRef      = useRef(clip)
+  const clipStartRef = useRef(0)
+  const clipEndRef   = useRef(0)
+  clipRef.current      = clip
+  clipStartRef.current = clip ? clip.tcIn  + clip.trimStart : 0
+  clipEndRef.current   = clip ? clip.tcOut - clip.trimEnd   : 0
+
+  const clipStart = clipStartRef.current
+  const clipEnd   = clipEndRef.current
   const clipDur   = Math.max(0, clipEnd - clipStart) / (clip?.speed ?? 1)
 
-  // Seek to clip start whenever active clip changes
+  // Reset when the clip changes (new key on <video> handles the actual reload)
   useEffect(() => {
-    const video = videoRef.current
-    if (!video || !clip) return
     setPlaying(false)
     setHasVideo(false)
+    setLoadError(false)
     setCurrent(0)
-  }, [clip?.sourceFileId, clip?.id])
+  }, [clip?.id])
 
-  function handleLoaded() {
+  // Attach native media event listeners — more reliable than JSX onLoadedMetadata
+  // for non-bubbling events, and avoids the React re-render timing race.
+  useEffect(() => {
     const video = videoRef.current
-    if (!video || !clip) return
-    setHasVideo(true)
-    video.currentTime = clipStart
-    if (clip.speed !== 1) video.playbackRate = clip.speed
-  }
+    if (!video) return
 
-  function handleTimeUpdate() {
-    const video = videoRef.current
-    if (!video || !clip) return
-    const rel = video.currentTime - clipStart
-    setCurrent(Math.max(0, rel))
-    if (video.currentTime >= clipEnd) {
-      video.pause()
-      video.currentTime = clipStart
+    const onCanPlay = () => {
+      const c = clipRef.current
+      if (!c) return
+      setHasVideo(true)
+      setLoadError(false)
+      if (c.speed !== 1) video.playbackRate = c.speed
+      // Only seek if the video is paused (don't interrupt an in-progress play)
+      if (video.paused) {
+        video.currentTime = clipStartRef.current
+      }
+    }
+
+    const onTimeUpdate = () => {
+      const c = clipRef.current
+      if (!c || !videoRef.current) return
+      const rel = video.currentTime - clipStartRef.current
+      setCurrent(Math.max(0, rel))
+      if (clipEndRef.current > clipStartRef.current && video.currentTime >= clipEndRef.current) {
+        video.pause()
+        video.currentTime = clipStartRef.current
+        setPlaying(false)
+        setCurrent(0)
+      }
+    }
+
+    const onError = () => {
+      setHasVideo(false)
+      setLoadError(true)
+    }
+
+    const onEnded = () => {
       setPlaying(false)
       setCurrent(0)
     }
-  }
+
+    video.addEventListener('canplay', onCanPlay)
+    video.addEventListener('timeupdate', onTimeUpdate)
+    video.addEventListener('error', onError)
+    video.addEventListener('ended', onEnded)
+
+    // Handle already-ready video (e.g. browser cache fires canplay before listener attached)
+    if (video.readyState >= 3) onCanPlay()
+
+    return () => {
+      video.removeEventListener('canplay', onCanPlay)
+      video.removeEventListener('timeupdate', onTimeUpdate)
+      video.removeEventListener('error', onError)
+      video.removeEventListener('ended', onEnded)
+    }
+  }, [clip?.id])
 
   function togglePlay() {
     const video = videoRef.current
     if (!video || !clip) return
+
     if (video.paused) {
-      if (video.currentTime >= clipEnd || video.currentTime < clipStart) {
+      // Seek to clip start if out of range (only when video data is ready)
+      if (hasVideo && (video.currentTime >= clipEnd || video.currentTime < clipStart)) {
         video.currentTime = clipStart
       }
-      video.play().then(() => setPlaying(true)).catch(() => setPlaying(false))
+      // Always attempt play — browser buffers as needed; promise handles not-ready
+      video.play()
+        .then(() => setPlaying(true))
+        .catch((err: DOMException) => {
+          // AbortError is common when src changes mid-request; ignore it.
+          // NotAllowedError means the browser blocked autoplay (rare for user clicks).
+          if (err.name !== 'AbortError') {
+            console.warn('[PreviewPlayer] play() rejected:', err.name, err.message)
+          }
+          setPlaying(false)
+        })
     } else {
       video.pause()
       setPlaying(false)
@@ -75,6 +131,8 @@ export function PreviewPlayer({ clip }: Props) {
     setPlaying(false)
   }
 
+  useImperativeHandle(ref, () => ({ togglePlay }))
+
   const progress = clipDur > 0 ? Math.min(1, current / clipDur) : 0
 
   return (
@@ -88,17 +146,35 @@ export function PreviewPlayer({ clip }: Props) {
               src={`/api/files/${clip.sourceFileId}/stream`}
               style={styles.video}
               preload="metadata"
-              onLoadedMetadata={handleLoaded}
-              onTimeUpdate={handleTimeUpdate}
-              onError={() => setHasVideo(false)}
+              playsInline
             />
+            {/* Overlay shows thumbnail + play button while video isn't ready */}
             {!hasVideo && (
-              <div style={styles.noVideo}>
-                <span style={styles.noVideoIcon}>🎬</span>
-                <p style={styles.noVideoText}>
-                  Video preview unavailable
-                </p>
-                <p style={styles.noVideoHint}>File streams from R2 when a real upload is processed</p>
+              <div style={styles.noVideo} onClick={togglePlay}>
+                {loadError ? (
+                  <>
+                    <span style={styles.noVideoIcon}>⚠️</span>
+                    <p style={styles.noVideoText}>Video could not be loaded</p>
+                    <p style={styles.noVideoHint}>Check that the source file exists and the backend is running</p>
+                  </>
+                ) : clip.thumbKey ? (
+                  <>
+                    <img
+                      src={`/api/files/${clip.thumbKey}`}
+                      style={styles.thumbImg}
+                      alt=""
+                      draggable={false}
+                    />
+                    <div style={styles.playOverlay}>
+                      <div style={styles.playOverlayBtn}>▶</div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <span style={styles.noVideoIcon}>🎬</span>
+                    <p style={styles.noVideoText}>Loading video…</p>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -140,7 +216,7 @@ export function PreviewPlayer({ clip }: Props) {
       )}
     </div>
   )
-}
+})
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
@@ -158,7 +234,23 @@ const styles: Record<string, React.CSSProperties> = {
     position: 'absolute', inset: 0,
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center', gap: 8,
-    background: '#050510',
+    background: '#050510', cursor: 'pointer',
+  },
+  thumbImg: {
+    position: 'absolute', inset: 0, width: '100%', height: '100%',
+    objectFit: 'cover',
+  },
+  playOverlay: {
+    position: 'absolute', inset: 0,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'rgba(0,0,0,0.25)',
+  },
+  playOverlayBtn: {
+    width: 56, height: 56, borderRadius: '50%',
+    background: 'rgba(108,99,255,0.92)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 22, color: '#fff',
+    boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
   },
   noVideoIcon: { fontSize: 32 },
   noVideoText: { fontSize: 14, color: '#5050a0', margin: 0 },

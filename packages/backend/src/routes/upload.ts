@@ -1,24 +1,63 @@
 import type { FastifyInstance } from 'fastify'
 import { Server, EVENTS } from '@tus/server'
 import { S3Store } from '@tus/s3-store'
+import { FileStore } from '@tus/file-store'
+import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
+import { getSignedUrl }               from '@aws-sdk/s3-request-presigner'
+import { mkdirSync, existsSync } from 'node:fs'
+import { rm, readFile, rename } from 'node:fs/promises'
+import { join }                       from 'node:path'
+import { tmpdir }                     from 'node:os'
 import { enqueueAnalysis } from '../jobs/queue'
-import { seedStubClips } from './projects'
+import { hasFFmpeg, ffprobe, generateClipThumbnail } from '../lib/ffmpeg'
+import { analyzeVideoForClips } from '../lib/analyzeVideo'
 import { sendClipsReadyEmail } from '../lib/notify'
 
+// True only when all three R2 env vars are present
+const R2_READY = !!(
+  process.env.R2_ACCOUNT_ID &&
+  process.env.R2_ACCESS_KEY_ID &&
+  process.env.R2_BUCKET
+)
+
+// Local fallback upload directory (used when R2 is not configured)
+const LOCAL_UPLOADS_DIR = join(tmpdir(), 'pdubfancut-uploads')
+
 function buildTusServer(fastify: FastifyInstance) {
-  const store = new S3Store({
-    s3ClientConfig: {
-      bucket: process.env.R2_BUCKET!,
-      // R2 requires region "auto", a custom endpoint, and path-style URLs.
-      region: 'auto',
-      endpoint: `https://${process.env.R2_ACCOUNT_ID!}.r2.cloudflarestorage.com`,
-      forcePathStyle: true,
-      credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
-      },
+  // S3Client only used for presigned URL generation (ffprobe) — created
+  // unconditionally but only called when R2_READY is true
+  const s3 = new S3Client({
+    region: 'auto',
+    endpoint: `https://${process.env.R2_ACCOUNT_ID ?? 'placeholder'}.r2.cloudflarestorage.com`,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId:     process.env.R2_ACCESS_KEY_ID  ?? '',
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? '',
     },
   })
+
+  let store: S3Store | FileStore
+  if (R2_READY) {
+    store = new S3Store({
+      s3ClientConfig: {
+        bucket: process.env.R2_BUCKET!,
+        region: 'auto',
+        endpoint: `https://${process.env.R2_ACCOUNT_ID!}.r2.cloudflarestorage.com`,
+        forcePathStyle: true,
+        credentials: {
+          accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+          secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+        },
+      },
+    })
+  } else {
+    mkdirSync(LOCAL_UPLOADS_DIR, { recursive: true })
+    store = new FileStore({ directory: LOCAL_UPLOADS_DIR })
+    fastify.log.warn(
+      { dir: LOCAL_UPLOADS_DIR },
+      'R2 not configured — using local file store for uploads (dev mode). Set R2_* env vars for production.',
+    )
+  }
 
   const server = new Server({
     path: '/api/upload',
@@ -97,6 +136,30 @@ function buildTusServer(fastify: FastifyInstance) {
       )
       const sourceFileId: string = sfRes.rows[0]?.id
 
+      // Run ffprobe in the background to populate real duration/codec metadata.
+      // Non-blocking: a failure here never stalls the upload response.
+      ;(async () => {
+        if (!await hasFFmpeg()) return
+        const probeTarget = R2_READY
+          ? await getSignedUrl(
+              s3,
+              new GetObjectCommand({ Bucket: process.env.R2_BUCKET!, Key: upload.id }),
+              { expiresIn: 300 },
+            )
+          : join(LOCAL_UPLOADS_DIR, upload.id)
+        const meta = await ffprobe(probeTarget)
+        if (!meta) return
+        await fastify.pg.query(
+          `UPDATE source_files
+           SET duration_secs = $2, codec = $3, width = $4, height = $5
+           WHERE tus_upload_id = $1`,
+          [upload.id, meta.duration_secs, meta.codec, meta.width, meta.height],
+        )
+        fastify.log.info({ uploadId: upload.id, meta }, 'ffprobe metadata updated')
+      })().catch((err: any) =>
+        fastify.log.warn({ err: err.message, uploadId: upload.id }, 'ffprobe failed (non-fatal)'),
+      )
+
       // Deduplication: check if another project already processed this exact file
       // (same size + original filename — full hash computed asynchronously in Phase 2)
       const dedupRes = await fastify.pg.query(
@@ -150,13 +213,15 @@ function buildTusServer(fastify: FastifyInstance) {
         [projectId, analysis_mode === 'full' ? 'full_analysis' : 'quick_search']
       )
 
-      // Enqueue with a 5-second timeout so a blocked Redis doesn't stall the upload.
+      // 500ms timeout — if Redis is reachable it responds in <50ms; anything longer
+      // means it's unreachable and we should fall through to inline immediately so
+      // the tus response isn't delayed (proxies kill long-open PATCH connections).
       const enqueueTimeout = new Promise<never>((_, rej) =>
-        setTimeout(() => rej(new Error('queue timeout')), 5000)
+        setTimeout(() => rej(new Error('queue timeout')), 500)
       )
-      let bullmqId: string | undefined
+      let jobEnqueued = false
       try {
-        bullmqId = await Promise.race([
+        const bullmqId = await Promise.race([
           enqueueAnalysis({
             projectId,
             sourceFileId,
@@ -170,8 +235,10 @@ function buildTusServer(fastify: FastifyInstance) {
           `UPDATE jobs SET bullmq_id = $2 WHERE id = $1`,
           [jobRes.rows[0].id, bullmqId]
         )
+        jobEnqueued = true
+        fastify.log.info({ projectId }, 'Job enqueued — worker will handle analysis')
       } catch (err: any) {
-        fastify.log.warn({ err: err.message }, 'Job enqueue failed — worker queue may be unavailable')
+        fastify.log.warn({ err: err.message }, 'Job enqueue failed — running inline analysis fallback')
       }
 
       await fastify.pg.query(
@@ -179,37 +246,91 @@ function buildTusServer(fastify: FastifyInstance) {
         [projectId]
       )
 
-      // Stub analysis: seed clips and mark ready after a simulated delay.
-      // Replace with a real GPU worker call when the AI pipeline is ready.
-      const stubDelayMs = 5000 + Math.random() * 5000
-      setTimeout(async () => {
-        try {
-          const sf = await fastify.pg.query(
-            `SELECT id FROM source_files WHERE tus_upload_id = $1`, [upload.id],
-          )
-          if (sf.rows[0]) {
-            await seedStubClips(fastify, projectId, sf.rows[0].id, false)
+      // Inline analysis fallback: runs only when the BullMQ worker is unreachable.
+      // When the worker IS available, it handles analysis end-to-end via the queue.
+      if (!jobEnqueued) {
+        ;(async () => {
+          try {
+            const ffmpegAvail = await hasFFmpeg()
+            const probeTarget = R2_READY
+              ? await getSignedUrl(s3, new GetObjectCommand({ Bucket: process.env.R2_BUCKET!, Key: upload.id }), { expiresIn: 300 })
+              : join(LOCAL_UPLOADS_DIR, upload.id)
+
+            let durationSecs: number | undefined
+            if (ffmpegAvail) {
+              const meta = await ffprobe(probeTarget)
+              if (meta) {
+                await fastify.pg.query(
+                  `UPDATE source_files SET duration_secs=$2, codec=$3, width=$4, height=$5 WHERE tus_upload_id=$1`,
+                  [upload.id, meta.duration_secs, meta.codec, meta.width, meta.height],
+                )
+                durationSecs = meta.duration_secs > 0 ? meta.duration_secs : undefined
+              }
+            }
+
+            const videoSource = R2_READY
+              ? { type: 'url' as const, url: await getSignedUrl(s3, new GetObjectCommand({ Bucket: process.env.R2_BUCKET!, Key: upload.id }), { expiresIn: 3600 }) }
+              : { type: 'file' as const, path: join(LOCAL_UPLOADS_DIR, upload.id), mimeType: (upload.metadata?.filetype as string | undefined) ?? 'video/mp4' }
+
+            fastify.log.info({ projectId, durationSecs }, 'Inline analysis: calling Claude…')
+            const rawClips = await analyzeVideoForClips(videoSource, durationSecs)
+
+            let clips = durationSecs
+              ? rawClips.filter((c) => c.timecode_in >= 0 && c.timecode_in < durationSecs!)
+              : rawClips
+
+            if (clips.length === 0 && durationSecs && durationSecs > 0) {
+              clips = [{ timecode_in: 0, timecode_out: durationSecs, scene_tags: [{ tag: 'shot_on_goal', confidence: 0.5 }], players: [], confidence: 0.5 }]
+            }
+
+            const ffmpegInput = R2_READY
+              ? (videoSource as { type: 'url'; url: string }).url
+              : (videoSource as { type: 'file'; path: string }).path
+
+            for (const clip of clips) {
+              const insertRes = await fastify.pg.query(
+                `INSERT INTO clips (project_id, source_file_id, timecode_in, timecode_out, scene_tags, players, confidence, review_status)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,'auto') RETURNING id`,
+                [projectId, sourceFileId, clip.timecode_in, clip.timecode_out,
+                 JSON.stringify(clip.scene_tags), JSON.stringify(clip.players),
+                 Math.min(1, Math.max(0, clip.confidence))],
+              )
+              const clipId: string = insertRes.rows[0].id
+
+              if (ffmpegAvail) {
+                const midSecs = (clip.timecode_in + clip.timecode_out) / 2
+                const thumbKey = `thumb-${clipId}.jpg`
+                const tmpThumb = join(tmpdir(), thumbKey)
+                try {
+                  await generateClipThumbnail(ffmpegInput, midSecs, tmpThumb)
+                  if (!existsSync(tmpThumb)) await generateClipThumbnail(ffmpegInput, 0, tmpThumb)
+                  const thumbBuf = await readFile(tmpThumb)
+                  if (R2_READY) {
+                    await s3.send(new PutObjectCommand({ Bucket: process.env.R2_BUCKET!, Key: thumbKey, Body: thumbBuf, ContentLength: thumbBuf.byteLength, ContentType: 'image/jpeg' }))
+                  } else {
+                    mkdirSync(join(LOCAL_UPLOADS_DIR, 'thumbs'), { recursive: true })
+                    await rename(tmpThumb, join(LOCAL_UPLOADS_DIR, 'thumbs', thumbKey))
+                  }
+                  await fastify.pg.query(`UPDATE clips SET thumb_key=$1 WHERE id=$2`, [thumbKey, clipId])
+                } catch (e: any) {
+                  fastify.log.warn({ err: e.message, clipId }, 'Thumbnail generation failed (non-fatal)')
+                } finally {
+                  await rm(tmpThumb, { force: true }).catch(() => {})
+                }
+              }
+            }
+
+            fastify.log.info({ projectId, clipCount: clips.length }, 'Inline analysis complete')
+          } catch (err: any) {
+            fastify.log.warn({ err: err.message, projectId }, 'Inline analysis failed')
           }
-          const latestJob = await fastify.pg.query(
-            `SELECT id FROM jobs WHERE project_id = $1 ORDER BY created_at DESC LIMIT 1`,
-            [projectId],
-          )
-          if (latestJob.rows[0]) {
-            await fastify.pg.query(
-              `UPDATE jobs SET status = 'completed', updated_at = NOW() WHERE id = $1`,
-              [latestJob.rows[0].id],
-            )
-          }
-          await fastify.pg.query(
-            `UPDATE projects SET status = 'ready', updated_at = NOW() WHERE id = $1`,
-            [projectId],
-          )
-          fastify.log.info({ projectId }, 'Stub analysis complete')
-          await sendClipsReadyEmail({ log: fastify.log }, projectId, projectName, userId)
-        } catch (err: any) {
-          fastify.log.error({ err: err.message }, 'Stub analysis failed')
-        }
-      }, stubDelayMs)
+
+          // Mark job + project ready regardless of clip count
+          await fastify.pg.query(`UPDATE jobs SET status='completed', updated_at=NOW() WHERE id=$1`, [jobRes.rows[0].id]).catch(() => {})
+          await fastify.pg.query(`UPDATE projects SET status='ready', updated_at=NOW() WHERE id=$1`, [projectId]).catch(() => {})
+          await sendClipsReadyEmail({ log: fastify.log }, projectId, projectName, userId).catch(() => {})
+        })()
+      }
 
       return { res }
     },
@@ -233,6 +354,22 @@ export async function uploadRoutes(fastify: FastifyInstance) {
 
   const handler = async (req: any, reply: any) => {
     reply.hijack()
+    // Fastify's CORS plugin hooks don't run on hijacked replies — inject manually
+    // so the browser can read tus error responses (e.g. 404, 412 on HEAD).
+    const origin = req.headers.origin as string | undefined
+    if (origin) {
+      reply.raw.setHeader('Access-Control-Allow-Origin', origin)
+      reply.raw.setHeader('Vary', 'Origin')
+      reply.raw.setHeader('Access-Control-Allow-Methods', 'POST, PATCH, HEAD, DELETE, OPTIONS')
+      reply.raw.setHeader(
+        'Access-Control-Allow-Headers',
+        'Tus-Resumable, Upload-Offset, Upload-Length, Upload-Metadata, Upload-Checksum, Upload-Defer-Length, Content-Type, Authorization',
+      )
+      reply.raw.setHeader(
+        'Access-Control-Expose-Headers',
+        'Location, Tus-Resumable, Upload-Offset, Upload-Length, Upload-Expires',
+      )
+    }
     tusServer.handle(req.raw, reply.raw)
   }
 

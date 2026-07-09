@@ -27,6 +27,7 @@ export interface TimelineClip {
   id: string           // unique slot UUID (not the DB clip ID)
   clipId: string       // DB clip UUID
   sourceFileId: string
+  thumbKey: string | null
   label: string        // e.g. "GOAL"
   color: string
   tcIn: number         // timecode_in (seconds)
@@ -45,6 +46,7 @@ function clipToSlot(c: Clip): TimelineClip {
     id: crypto.randomUUID(),
     clipId: c.id,
     sourceFileId: c.source_file_id,
+    thumbKey: c.thumb_key,
     label: SCENE_LABEL[c.scene_tags[0]?.tag ?? ''] ?? 'CLIP',
     color: SCENE_COLOR[c.scene_tags[0]?.tag ?? ''] ?? '#6c63ff',
     tcIn: parseFloat(c.timecode_in),

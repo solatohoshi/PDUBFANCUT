@@ -73,10 +73,11 @@ interface Props {
   onRemove:          (id: string) => void
   onMove:            (id: string, toIndex: number) => void
   onUpdate:          (id: string, patch: { trimStart?: number; trimEnd?: number; speed?: number }) => void
+  onDropClip?:       (clipId: string) => void
 }
 
 export function TimelineTrack({
-  slots, activeId, effectiveDuration, onSelect, onRemove, onMove, onUpdate,
+  slots, activeId, effectiveDuration, onSelect, onRemove, onMove, onUpdate, onDropClip,
 }: Props) {
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [overIndex, setOverIndex]   = useState<number | null>(null)
@@ -150,7 +151,12 @@ export function TimelineTrack({
 
   function handleDrop(e: React.DragEvent, index: number) {
     e.preventDefault()
-    if (draggingId) onMove(draggingId, index)
+    if (draggingId) {
+      onMove(draggingId, index)
+    } else {
+      const clipId = e.dataTransfer.getData('text/clip-id')
+      if (clipId && onDropClip) onDropClip(clipId)
+    }
     setDraggingId(null)
     setOverIndex(null)
   }
@@ -222,7 +228,14 @@ export function TimelineTrack({
       })()}
 
       {/* ── Scrollable clip strip ─────────────────────────────────────── */}
-      <div style={styles.trackArea}>
+      <div
+        style={styles.trackArea}
+        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }}
+        onDrop={(e) => {
+          const clipId = e.dataTransfer.getData('text/clip-id')
+          if (clipId && onDropClip) { e.stopPropagation(); onDropClip(clipId) }
+        }}
+      >
         <div style={styles.track}>
           {slots.length === 0 && (
             <div style={styles.emptyTrack}>Add clips from the library →</div>
