@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { ProjectDetail, Clip } from '../lib/api'
@@ -40,32 +40,34 @@ export function EditorPage() {
     try { return JSON.parse(localStorage.getItem(captionKey) ?? '[]') } catch { return [] }
   })
 
-  function persistCaptions(next: TextSlot[]) {
-    setTextSlots(next)
-    try { localStorage.setItem(captionKey, JSON.stringify(next)) } catch {}
-  }
+  useEffect(() => {
+    try { localStorage.setItem(captionKey, JSON.stringify(textSlots)) } catch {}
+  }, [textSlots, captionKey])
 
-  function addTextSlot(style: TextSlot['style'], text = '') {
-    const slot: TextSlot = { id: crypto.randomUUID(), text, style }
-    persistCaptions([...textSlots, slot])
-  }
+  // Stable (functional-update) callbacks so the memoized CaptionTrack only
+  // re-renders when its slots actually change
+  const addTextSlot = useCallback((style: TextSlot['style'], text = '') => {
+    setTextSlots((prev) => [...prev, { id: crypto.randomUUID(), text, style }])
+  }, [])
 
-  function updateTextSlot(slotId: string, patch: Partial<TextSlot>) {
-    persistCaptions(textSlots.map((s) => s.id === slotId ? { ...s, ...patch } : s))
-  }
+  const updateTextSlot = useCallback((slotId: string, patch: Partial<TextSlot>) => {
+    setTextSlots((prev) => prev.map((s) => s.id === slotId ? { ...s, ...patch } : s))
+  }, [])
 
-  function removeTextSlot(slotId: string) {
-    persistCaptions(textSlots.filter((s) => s.id !== slotId))
-  }
+  const removeTextSlot = useCallback((slotId: string) => {
+    setTextSlots((prev) => prev.filter((s) => s.id !== slotId))
+  }, [])
 
-  function moveTextSlot(slotId: string, toIndex: number) {
-    const from = textSlots.findIndex((s) => s.id === slotId)
-    if (from === -1) return
-    const next = [...textSlots]
-    const [item] = next.splice(from, 1)
-    next.splice(toIndex, 0, item)
-    persistCaptions(next)
-  }
+  const moveTextSlot = useCallback((slotId: string, toIndex: number) => {
+    setTextSlots((prev) => {
+      const from = prev.findIndex((s) => s.id === slotId)
+      if (from === -1) return prev
+      const next = [...prev]
+      const [item] = next.splice(from, 1)
+      next.splice(toIndex, 0, item)
+      return next
+    })
+  }, [])
   const [libScene, setLibScene]       = useState('all')
   const [libSearch, setLibSearch]     = useState('')
   const [initDone, setInitDone]       = useState(false)
@@ -104,6 +106,32 @@ export function EditorPage() {
   }, [initDone, timeline.slots.length])
 
   const activeSlot = timeline.slots.find((s) => s.id === activeId) ?? null
+  const { removeSlot, moveSlot, updateSlot, addClip } = timeline
+
+  // Stable handlers for the memoized TimelineTrack
+  const handleSelect = useCallback((slotId: string) => {
+    setActiveId((prev) => prev === slotId ? null : slotId)
+  }, [])
+
+  const handleRemove = useCallback((slotId: string) => {
+    removeSlot(slotId)
+    setActiveId((prev) => prev === slotId ? null : prev)
+  }, [removeSlot])
+
+  const allClipsRef = useRef(allClips)
+  allClipsRef.current = allClips
+  const handleDropClip = useCallback((clipId: string) => {
+    const clip = allClipsRef.current.find((c) => c.id === clipId)
+    if (clip) addClip(clip)
+  }, [addClip])
+
+  const suggestedPlayer = useMemo(() => {
+    if (!activeSlot) return undefined
+    const clip = allClips.find((c) => c.id === activeSlot.clipId)
+    return clip?.players[0]
+      ? `#${clip.players[0].jersey} ${clip.players[0].name}`
+      : undefined
+  }, [activeSlot, allClips])
 
   // Keyboard shortcuts: Space = play/pause, Delete/Backspace = remove, ←/→ = step
   useEffect(() => {
@@ -148,7 +176,10 @@ export function EditorPage() {
     })
   }, [allClips, libScene, libSearch])
 
-  const timelineClipIds = new Set(timeline.slots.map((s) => s.clipId))
+  const timelineClipIds = useMemo(
+    () => new Set(timeline.slots.map((s) => s.clipId)),
+    [timeline.slots],
+  )
 
   if (loading) return (
     <div style={styles.center}>
@@ -209,17 +240,11 @@ export function EditorPage() {
             slots={timeline.slots}
             activeId={activeId}
             effectiveDuration={timeline.effectiveDuration}
-            onSelect={(slotId) => setActiveId((prev) => prev === slotId ? null : slotId)}
-            onRemove={(slotId) => {
-              timeline.removeSlot(slotId)
-              if (activeId === slotId) setActiveId(null)
-            }}
-            onMove={timeline.moveSlot}
-            onUpdate={timeline.updateSlot}
-            onDropClip={(clipId) => {
-              const clip = allClips.find((c) => c.id === clipId)
-              if (clip) timeline.addClip(clip)
-            }}
+            onSelect={handleSelect}
+            onRemove={handleRemove}
+            onMove={moveSlot}
+            onUpdate={updateSlot}
+            onDropClip={handleDropClip}
           />
 
           <CaptionTrack
@@ -228,16 +253,7 @@ export function EditorPage() {
             onUpdate={updateTextSlot}
             onRemove={removeTextSlot}
             onMove={moveTextSlot}
-            suggestedPlayer={
-              activeSlot
-                ? (() => {
-                    const clip = allClips.find((c) => c.id === activeSlot.clipId)
-                    return clip?.players[0]
-                      ? `#${clip.players[0].jersey} ${clip.players[0].name}`
-                      : undefined
-                  })()
-                : undefined
-            }
+            suggestedPlayer={suggestedPlayer}
           />
         </div>
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import type { Clip } from '../lib/api'
 
 export const SCENE_COLOR: Record<string, string> = {
@@ -57,6 +57,10 @@ function clipToSlot(c: Clip): TimelineClip {
   }
 }
 
+export function effectiveDuration(s: TimelineClip) {
+  return Math.max(0, (s.tcOut - s.trimEnd) - (s.tcIn + s.trimStart)) / s.speed
+}
+
 export function useTimeline(projectId: string) {
   const [slots, setSlots] = useState<TimelineClip[]>(() => {
     try {
@@ -66,27 +70,42 @@ export function useTimeline(projectId: string) {
     }
   })
 
+  // Persist debounced — trim drags update slots on every mousemove, so a
+  // synchronous write here would serialize the whole timeline per pixel moved.
+  const latestSlots = useRef(slots)
+  latestSlots.current = slots
+
   useEffect(() => {
-    localStorage.setItem(slotKey(projectId), JSON.stringify(slots))
+    const timer = setTimeout(() => {
+      try { localStorage.setItem(slotKey(projectId), JSON.stringify(slots)) } catch {}
+    }, 250)
+    return () => clearTimeout(timer)
   }, [slots, projectId])
 
-  function addClip(clip: Clip) {
-    if (slots.some((s) => s.clipId === clip.id)) return
-    setSlots((prev) => [...prev, clipToSlot(clip)])
-  }
+  // Flush any pending write on unmount so the last edit isn't lost
+  useEffect(() => () => {
+    try { localStorage.setItem(slotKey(projectId), JSON.stringify(latestSlots.current)) } catch {}
+  }, [projectId])
 
-  function addClips(clips: Clip[]) {
-    const existing = new Set(slots.map((s) => s.clipId))
-    const toAdd = clips.filter((c) => !existing.has(c.id)).map(clipToSlot)
-    if (toAdd.length === 0) return
-    setSlots((prev) => [...prev, ...toAdd])
-  }
+  const addClip = useCallback((clip: Clip) => {
+    setSlots((prev) =>
+      prev.some((s) => s.clipId === clip.id) ? prev : [...prev, clipToSlot(clip)],
+    )
+  }, [])
 
-  function removeSlot(id: string) {
+  const addClips = useCallback((clips: Clip[]) => {
+    setSlots((prev) => {
+      const existing = new Set(prev.map((s) => s.clipId))
+      const toAdd = clips.filter((c) => !existing.has(c.id)).map(clipToSlot)
+      return toAdd.length === 0 ? prev : [...prev, ...toAdd]
+    })
+  }, [])
+
+  const removeSlot = useCallback((id: string) => {
     setSlots((prev) => prev.filter((s) => s.id !== id))
-  }
+  }, [])
 
-  function moveSlot(id: string, toIndex: number) {
+  const moveSlot = useCallback((id: string, toIndex: number) => {
     setSlots((prev) => {
       const from = prev.findIndex((s) => s.id === id)
       if (from === -1 || from === toIndex) return prev
@@ -95,9 +114,9 @@ export function useTimeline(projectId: string) {
       next.splice(toIndex, 0, item)
       return next
     })
-  }
+  }, [])
 
-  function updateSlot(id: string, patch: Partial<Pick<TimelineClip, 'trimStart' | 'trimEnd' | 'speed'>>) {
+  const updateSlot = useCallback((id: string, patch: Partial<Pick<TimelineClip, 'trimStart' | 'trimEnd' | 'speed'>>) => {
     setSlots((prev) =>
       prev.map((s) => {
         if (s.id !== id) return s
@@ -110,17 +129,16 @@ export function useTimeline(projectId: string) {
         return merged
       }),
     )
-  }
+  }, [])
 
-  function clearTimeline() {
+  const clearTimeline = useCallback(() => {
     setSlots([])
-  }
+  }, [])
 
-  function effectiveDuration(s: TimelineClip) {
-    return Math.max(0, (s.tcOut - s.trimEnd) - (s.tcIn + s.trimStart)) / s.speed
-  }
-
-  const totalDuration = slots.reduce((sum, s) => sum + effectiveDuration(s), 0)
+  const totalDuration = useMemo(
+    () => slots.reduce((sum, s) => sum + effectiveDuration(s), 0),
+    [slots],
+  )
 
   return {
     slots,

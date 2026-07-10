@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, memo } from 'react'
 
 export interface TextSlot {
   id: string
@@ -27,7 +27,9 @@ interface Props {
   suggestedPlayer?: string   // from the active video clip's player tag
 }
 
-export function CaptionTrack({ slots, onAdd, onUpdate, onRemove, onMove, suggestedPlayer }: Props) {
+// Memoized: with stable handlers from EditorPage, only re-renders when the
+// text slots or the suggested player actually change
+export const CaptionTrack = memo(function CaptionTrack({ slots, onAdd, onUpdate, onRemove, onMove, suggestedPlayer }: Props) {
   const [editingId, setEditingId]   = useState<string | null>(null)
   const [editText, setEditText]     = useState('')
   const [draggingId, setDraggingId] = useState<string | null>(null)
@@ -181,7 +183,7 @@ export function CaptionTrack({ slots, onAdd, onUpdate, onRemove, onMove, suggest
       </div>
     </div>
   )
-}
+})
 
 const styles: Record<string, React.CSSProperties> = {
   wrapper: {

@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, forwardRef, useImperativeHandle } from 'react'
+import { useRef, useState, useEffect, forwardRef, useImperativeHandle, memo } from 'react'
 import type { TimelineClip } from '../../hooks/useTimeline'
 
 function formatTime(secs: number): string {
@@ -12,7 +12,9 @@ interface Props {
   clip: TimelineClip | null
 }
 
-export const PreviewPlayer = forwardRef<{ togglePlay: () => void }, Props>(function PreviewPlayer({ clip }, ref) {
+// Memoized: only re-renders when the active clip changes, not on every
+// unrelated editor state update (library search keystrokes, caption edits, …)
+export const PreviewPlayer = memo(forwardRef<{ togglePlay: () => void }, Props>(function PreviewPlayer({ clip }, ref) {
   const videoRef   = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying]   = useState(false)
   const [current, setCurrent]   = useState(0)
@@ -216,7 +218,7 @@ export const PreviewPlayer = forwardRef<{ togglePlay: () => void }, Props>(funct
       )}
     </div>
   )
-})
+}))
 
 const styles: Record<string, React.CSSProperties> = {
   container: {

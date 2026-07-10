@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { ProjectDetail, Clip } from '../lib/api'
@@ -82,11 +82,12 @@ export function ProjectPage() {
   }, [id, project?.status])
 
   // When the project is ready and clips have no thumbnails, kick off backfill once
-  // then keep polling until thumbnails appear.
+  // then keep polling until thumbnails appear. Depend on the boolean, not the
+  // clips array, so the interval survives across polls instead of being
+  // torn down and recreated every 5 s.
+  const missingThumb = clips.some((c) => !c.thumb_key)
   useEffect(() => {
-    if (!id || project?.status !== 'ready') return
-    const missingThumb = clips.some((c) => !c.thumb_key)
-    if (!missingThumb) return
+    if (!id || project?.status !== 'ready' || !missingThumb) return
 
     if (!rethumbFired.current) {
       rethumbFired.current = true
@@ -96,7 +97,7 @@ export function ProjectPage() {
     // Poll every 5 s until all thumbnails are filled in
     const timer = setInterval(loadData, 5000)
     return () => clearInterval(timer)
-  }, [id, project?.status, clips])
+  }, [id, project?.status, missingThumb])
 
   const filteredClips = useMemo(() => {
     let result = clips.filter((c) => {
@@ -115,14 +116,27 @@ export function ProjectPage() {
     [clips],
   )
 
-  function toggleClip(clipId: string) {
+  // Per-clip scene counts for the quick-add presets row (computed once per
+  // clips fetch instead of clips × scenes on every render)
+  const sceneCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const c of clips) {
+      const tags = new Set(c.scene_tags.map((st) => st.tag))
+      for (const tag of tags) counts[tag] = (counts[tag] ?? 0) + 1
+    }
+    return counts
+  }, [clips])
+
+  // Stable callbacks so memoized ClipCards only re-render when their own
+  // clip or selection state changes
+  const toggleClip = useCallback((clipId: string) => {
     setSelected((prev) => {
       const next = new Set(prev)
       if (next.has(clipId)) next.delete(clipId)
       else next.add(clipId)
       return next
     })
-  }
+  }, [])
 
   function addAllScene(scene: string) {
     const ids = clips
@@ -132,12 +146,19 @@ export function ProjectPage() {
     navigate(`/projects/${id}/editor`, { state: { addClipIds: ids } })
   }
 
-  async function handleReviewStatus(clipId: string, status: 'confirmed' | 'dismissed' | 'auto') {
+  const confirmClip = useCallback(async (clipId: string) => {
     try {
-      const updated = await api.updateClipStatus(clipId, status)
+      const updated = await api.updateClipStatus(clipId, 'confirmed')
       setClips((prev) => prev.map((c) => c.id === updated.id ? updated : c))
     } catch {}
-  }
+  }, [])
+
+  const dismissClip = useCallback(async (clipId: string) => {
+    try {
+      const updated = await api.updateClipStatus(clipId, 'dismissed')
+      setClips((prev) => prev.map((c) => c.id === updated.id ? updated : c))
+    } catch {}
+  }, [])
 
   async function handleReanalyze() {
     if (!id || reanalyzing) return
@@ -283,14 +304,11 @@ export function ProjectPage() {
       {clips.length > 0 && (
         <div style={styles.presetsRow}>
           <span style={styles.presetsLabel}>Quick add:</span>
-          {ALL_SCENES.filter((s) => clips.some((c) => c.scene_tags.some((st) => st.tag === s))).map((s) => {
-            const count = clips.filter((c) => c.scene_tags.some((st) => st.tag === s)).length
-            return (
-              <button key={s} style={styles.presetBtn} onClick={() => addAllScene(s)}>
-                All {SCENE_LABEL[s]}s ({count}) →
-              </button>
-            )
-          })}
+          {ALL_SCENES.filter((s) => sceneCounts[s]).map((s) => (
+            <button key={s} style={styles.presetBtn} onClick={() => addAllScene(s)}>
+              All {SCENE_LABEL[s]}s ({sceneCounts[s]}) →
+            </button>
+          ))}
         </div>
       )}
 
@@ -385,9 +403,9 @@ export function ProjectPage() {
                 key={clip.id}
                 clip={clip}
                 selected={selected.has(clip.id)}
-                onToggle={() => toggleClip(clip.id)}
-                onConfirm={() => handleReviewStatus(clip.id, 'confirmed')}
-                onDismiss={() => handleReviewStatus(clip.id, 'dismissed')}
+                onToggle={toggleClip}
+                onConfirm={confirmClip}
+                onDismiss={dismissClip}
               />
             ))}
           </div>

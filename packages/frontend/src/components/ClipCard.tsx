@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import type { Clip } from '../lib/api'
 
 const SCENE_COLOR: Record<string, string> = {
@@ -33,7 +34,14 @@ const SCENE_ICON: Record<string, string> = {
   celebration:  '🎉',
 }
 
+// SVG data URIs are deterministic per (tag, dur) — cache them so cards don't
+// rebuild + re-encode the string on every render.
+const thumbCache = new Map<string, string>()
+
 function makeThumbnail(tag: string, color: string, dur: number): string {
+  const cacheKey = `${tag}:${dur}`
+  const cached = thumbCache.get(cacheKey)
+  if (cached) return cached
   const icon  = SCENE_ICON[tag]  ?? '📹'
   const label = SCENE_LABEL[tag] ?? 'CLIP'
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="280" height="120" viewBox="0 0 280 120">
@@ -50,7 +58,9 @@ function makeThumbnail(tag: string, color: string, dur: number): string {
     <text x="140" y="111" text-anchor="middle" font-family="monospace" font-size="10" fill="#404060">${dur}s</text>
     <rect x="0.5" y="0.5" width="279" height="119" fill="none" stroke="${color}" stroke-width="1" stroke-opacity="0.2" rx="6"/>
   </svg>`
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`
+  const uri = `data:image/svg+xml,${encodeURIComponent(svg)}`
+  thumbCache.set(cacheKey, uri)
+  return uri
 }
 
 function formatTimecode(secs: number): string {
@@ -70,12 +80,14 @@ function confidenceColor(c: number): string {
 interface Props {
   clip: Clip
   selected: boolean
-  onToggle: () => void
-  onConfirm?: () => void
-  onDismiss?: () => void
+  onToggle: (clipId: string) => void
+  onConfirm?: (clipId: string) => void
+  onDismiss?: (clipId: string) => void
 }
 
-export function ClipCard({ clip, selected, onToggle, onConfirm, onDismiss }: Props) {
+// Memoized: with stable callbacks from the parent, only the cards whose clip
+// or selection actually changed re-render (the grid can hold hundreds).
+export const ClipCard = memo(function ClipCard({ clip, selected, onToggle, onConfirm, onDismiss }: Props) {
   const tcIn  = parseFloat(clip.timecode_in)
   const tcOut = parseFloat(clip.timecode_out)
   const dur   = Math.round(tcOut - tcIn)
@@ -94,7 +106,7 @@ export function ClipCard({ clip, selected, onToggle, onConfirm, onDismiss }: Pro
         borderColor: selected ? '#6c63ff' : '#1e1e30',
         borderTopColor: primaryColor,
       }}
-      onClick={onToggle}
+      onClick={() => onToggle(clip.id)}
     >
       {/* Thumbnail */}
       <img
@@ -172,7 +184,7 @@ export function ClipCard({ clip, selected, onToggle, onConfirm, onDismiss }: Pro
           {onConfirm && (
             <button
               style={styles.confirmBtn}
-              onClick={(e) => { e.stopPropagation(); onConfirm() }}
+              onClick={(e) => { e.stopPropagation(); onConfirm(clip.id) }}
             >
               ✓ Confirm
             </button>
@@ -180,7 +192,7 @@ export function ClipCard({ clip, selected, onToggle, onConfirm, onDismiss }: Pro
           {onDismiss && (
             <button
               style={styles.dismissBtn}
-              onClick={(e) => { e.stopPropagation(); onDismiss() }}
+              onClick={(e) => { e.stopPropagation(); onDismiss(clip.id) }}
             >
               ✕ Dismiss
             </button>
@@ -192,14 +204,14 @@ export function ClipCard({ clip, selected, onToggle, onConfirm, onDismiss }: Pro
       {clip.review_status === 'dismissed' && onConfirm && (
         <button
           style={{ ...styles.confirmBtn, marginTop: 4 }}
-          onClick={(e) => { e.stopPropagation(); onConfirm() }}
+          onClick={(e) => { e.stopPropagation(); onConfirm(clip.id) }}
         >
           ↩ Restore
         </button>
       )}
     </div>
   )
-}
+})
 
 const styles: Record<string, React.CSSProperties> = {
   card: {

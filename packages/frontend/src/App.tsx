@@ -1,8 +1,18 @@
+import { lazy, Suspense } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
 import { HomePage } from './pages/HomePage'
-import { ProjectPage } from './pages/ProjectPage'
-import { EditorPage } from './pages/EditorPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
+
+// Code-split the heavier routes so the landing page loads without the
+// clip-review and editor bundles
+const ProjectPage = lazy(() =>
+  import('./pages/ProjectPage').then((m) => ({ default: m.ProjectPage })))
+const EditorPage = lazy(() =>
+  import('./pages/EditorPage').then((m) => ({ default: m.EditorPage })))
+
+function RouteFallback() {
+  return <div style={styles.fallback}>Loading…</div>
+}
 
 export function App() {
   const navigate = useNavigate()
@@ -16,11 +26,13 @@ export function App() {
       </header>
 
       <ErrorBoundary>
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/projects/:id" element={<ProjectPage />} />
-          <Route path="/projects/:id/editor" element={<EditorPage />} />
-        </Routes>
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/projects/:id" element={<ProjectPage />} />
+            <Route path="/projects/:id/editor" element={<EditorPage />} />
+          </Routes>
+        </Suspense>
       </ErrorBoundary>
     </div>
   )
@@ -35,5 +47,9 @@ const styles: Record<string, React.CSSProperties> = {
   logo: {
     fontSize: 20, fontWeight: 800, color: '#6c63ff',
     letterSpacing: '-0.02em', cursor: 'pointer',
+  },
+  fallback: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    padding: '80px 24px', fontSize: 14, color: '#6060a0',
   },
 }

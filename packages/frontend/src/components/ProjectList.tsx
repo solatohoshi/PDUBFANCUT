@@ -28,15 +28,17 @@ export function ProjectList({ refreshSignal }: Props) {
     fetchProjects().finally(() => setLoading(false))
   }, [refreshSignal])
 
-  // Auto-poll every 3 s while any project is still uploading or processing
+  // Auto-poll every 3 s while any project is still uploading or processing.
+  // Keyed on the derived boolean so each fetch (new array identity) doesn't
+  // tear down and recreate the interval.
+  const hasActive = projects.some(
+    (p) => p.status === 'uploading' || p.status === 'processing',
+  )
   useEffect(() => {
-    const hasActive = projects.some(
-      (p) => p.status === 'uploading' || p.status === 'processing',
-    )
     if (!hasActive) return
     const timer = setInterval(fetchProjects, 3000)
     return () => clearInterval(timer)
-  }, [projects])
+  }, [hasActive])
 
   if (loading) return <p style={styles.hint}>Loading…</p>
   if (!projects.length) return <p style={styles.hint}>No projects yet — upload a file to get started.</p>

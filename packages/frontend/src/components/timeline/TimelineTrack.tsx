@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, memo } from 'react'
 import type { TimelineClip } from '../../hooks/useTimeline'
 
 function formatTC(secs: number): string {
@@ -21,6 +21,7 @@ function parseTC(str: string): number | null {
 
 const PPS = 6        // base pixels per second
 const MIN_BLOCK_PX = 80
+const SPEEDS = [0.25, 0.5, 1.0, 2.0]
 
 function TCInput({ value, onCommit }: { value: number; onCommit: (raw: string) => void }) {
   const [editing, setEditing] = useState(false)
@@ -76,7 +77,9 @@ interface Props {
   onDropClip?:       (clipId: string) => void
 }
 
-export function TimelineTrack({
+// Memoized: with stable handlers from EditorPage, the track skips re-renders
+// caused by unrelated editor state (library search, caption edits, …)
+export const TimelineTrack = memo(function TimelineTrack({
   slots, activeId, effectiveDuration, onSelect, onRemove, onMove, onUpdate, onDropClip,
 }: Props) {
   const [draggingId, setDraggingId] = useState<string | null>(null)
@@ -88,7 +91,6 @@ export function TimelineTrack({
   useEffect(() => { onUpdateRef.current = onUpdate }, [onUpdate])
 
   const pps = PPS * zoom
-  const SPEEDS = [0.25, 0.5, 1.0, 2.0]
 
   // ── Global mouse events for trim drag ───────────────────────────────
   useEffect(() => {
@@ -390,7 +392,7 @@ export function TimelineTrack({
       </div>
     </div>
   )
-}
+})
 
 const styles: Record<string, React.CSSProperties> = {
   wrapper: {
