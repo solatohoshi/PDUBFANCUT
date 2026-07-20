@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, forwardRef, useImperativeHandle, memo } from 'react'
 import type { TimelineClip } from '../../hooks/useTimeline'
+import type { TextSlot } from './CaptionTrack'
 
 function formatTime(secs: number): string {
   const m = Math.floor(secs / 60)
@@ -10,11 +11,67 @@ function formatTime(secs: number): string {
 
 interface Props {
   clip: TimelineClip | null
+  /** Text overlays to composite on the preview. Each slot is positioned in
+   * absolute timeline seconds (same domain as the shared multi-track
+   * timeline in TimelineTrack.tsx) — shown here whenever the active clip's
+   * absolute playhead position falls within [startSecs, startSecs+durationSecs),
+   * matching what the export burns in via ffmpeg's `enable=between(...)`. */
+  textSlots?: TextSlot[]
+  /** The active clip's own start offset within the whole timeline (sum of
+   * effectiveDuration for every preceding slot) — lets this single-clip
+   * preview translate its local playhead into the same absolute domain
+   * textSlots are positioned in. */
+  clipAbsoluteStart?: number
 }
 
-// Memoized: only re-renders when the active clip changes, not on every
-// unrelated editor state update (library search keystrokes, caption edits, …)
-export const PreviewPlayer = memo(forwardRef<{ togglePlay: () => void }, Props>(function PreviewPlayer({ clip }, ref) {
+// Memoized: re-renders when the active clip OR the text overlays change, but
+// not on other unrelated editor state (library search keystrokes, etc.)
+export interface PreviewPlayerHandle {
+  togglePlay: () => void
+  /** Absolute source-file time (seconds) the playhead is currently at. */
+  getCurrentTime: () => number
+}
+
+const OVERLAY_STYLE_ORDER: TextSlot['style'][] = ['title', 'lower-third', 'caption']
+
+// Positioning zone per overlay style — percentages of the video frame, so
+// they hold up across every export preset's aspect ratio (portrait/square/landscape).
+const OVERLAY_ZONE_STYLE: Record<TextSlot['style'], React.CSSProperties> = {
+  title: {
+    position: 'absolute', left: '8%', right: '8%', top: '10%',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+    pointerEvents: 'none', zIndex: 2,
+  },
+  'lower-third': {
+    position: 'absolute', left: '6%', right: '6%', top: '76%',
+    display: 'flex', flexDirection: 'column', gap: 4,
+    pointerEvents: 'none', zIndex: 2,
+  },
+  caption: {
+    position: 'absolute', left: '8%', right: '8%', top: '88%',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+    pointerEvents: 'none', zIndex: 2,
+  },
+}
+
+const OVERLAY_LINE_STYLE: Record<TextSlot['style'], React.CSSProperties> = {
+  title: {
+    fontSize: '5.5cqw', fontWeight: 800, color: '#fff', textAlign: 'center',
+    textShadow: '0 2px 8px rgba(0,0,0,0.85)', lineHeight: 1.2,
+  },
+  'lower-third': {
+    fontSize: '3.2cqw', fontWeight: 700, color: '#fff', textAlign: 'left',
+    background: 'rgba(0,0,0,0.55)', padding: '0.4em 0.7em', borderRadius: 4,
+    alignSelf: 'flex-start', lineHeight: 1.3,
+  },
+  caption: {
+    fontSize: '3cqw', fontWeight: 600, color: '#fff', textAlign: 'center',
+    background: 'rgba(0,0,0,0.55)', padding: '0.3em 0.6em', borderRadius: 4,
+    lineHeight: 1.3,
+  },
+}
+
+export const PreviewPlayer = memo(forwardRef<PreviewPlayerHandle, Props>(function PreviewPlayer({ clip, textSlots = [], clipAbsoluteStart = 0 }, ref) {
   const videoRef   = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying]   = useState(false)
   const [current, setCurrent]   = useState(0)
@@ -133,7 +190,12 @@ export const PreviewPlayer = memo(forwardRef<{ togglePlay: () => void }, Props>(
     setPlaying(false)
   }
 
-  useImperativeHandle(ref, () => ({ togglePlay }))
+  useImperativeHandle(ref, () => ({
+    togglePlay,
+    // Read the live <video> position rather than the debounced `current` state
+    // so a split lands exactly where the user paused, not a stale render.
+    getCurrentTime: () => videoRef.current?.currentTime ?? clipStartRef.current,
+  }))
 
   const progress = clipDur > 0 ? Math.min(1, current / clipDur) : 0
 
@@ -179,6 +241,30 @@ export const PreviewPlayer = memo(forwardRef<{ togglePlay: () => void }, Props>(
                 )}
               </div>
             )}
+
+            {/* Text overlays — grouped by style; multiple slots of the same
+                style stack as separate lines within that style's zone.
+                `current` is source-domain elapsed time within the clip (not
+                speed-adjusted — currentTime advances at the source's own
+                rate regardless of playbackRate), so divide by speed to land
+                in the same absolute output-timeline domain textSlots use. */}
+            {(() => {
+              const absoluteCurrent = clipAbsoluteStart + current / (clip.speed || 1)
+              return OVERLAY_STYLE_ORDER.map((style) => {
+                const texts = textSlots.filter((s) =>
+                  s.style === style && s.text.trim() !== ''
+                  && absoluteCurrent >= s.startSecs && absoluteCurrent < s.startSecs + s.durationSecs,
+                )
+                if (texts.length === 0) return null
+                return (
+                  <div key={style} style={OVERLAY_ZONE_STYLE[style]}>
+                    {texts.map((s) => (
+                      <div key={s.id} style={OVERLAY_LINE_STYLE[style]}>{s.text}</div>
+                    ))}
+                  </div>
+                )
+              })
+            })()}
           </div>
 
           {/* Progress bar */}
@@ -230,6 +316,10 @@ const styles: Record<string, React.CSSProperties> = {
   videoWrap: {
     position: 'relative', background: '#000',
     aspectRatio: '16/9', overflow: 'hidden',
+    // Lets the text-overlay font sizes below use `cqw` (container query width)
+    // so they scale with the actual rendered player box, not the viewport —
+    // this box is a flex child at an unpredictable width, so `vw` would be wrong.
+    containerType: 'inline-size',
   },
   video: { width: '100%', height: '100%', objectFit: 'contain', display: 'block' },
   noVideo: {

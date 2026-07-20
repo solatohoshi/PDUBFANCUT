@@ -2,13 +2,16 @@ import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { ProjectDetail, Clip } from '../lib/api'
-import { useTimeline } from '../hooks/useTimeline'
+import { useTimeline, effectiveDuration } from '../hooks/useTimeline'
 import { SCENE_LABEL, SCENE_COLOR } from '../hooks/useTimeline'
 import { PreviewPlayer } from '../components/timeline/PreviewPlayer'
+import type { PreviewPlayerHandle } from '../components/timeline/PreviewPlayer'
 import { TimelineTrack } from '../components/timeline/TimelineTrack'
 import { ExportModal } from '../components/ExportModal'
-import { CaptionTrack } from '../components/timeline/CaptionTrack'
 import type { TextSlot } from '../components/timeline/CaptionTrack'
+import type { MusicTrack } from '../lib/api'
+
+const DEFAULT_TEXT_DURATION_SECS = 3
 
 const ALL_SCENES = [
   'goal', 'save', 'shot_on_goal', 'hit',
@@ -34,7 +37,8 @@ export function EditorPage() {
   const timeline = useTimeline(id ?? '')
   const [activeId, setActiveId]       = useState<string | null>(null)
 
-  // ── Caption / text overlay track ──────────────────────────────────────────
+  // ── Text overlay track — positioned in absolute timeline seconds, shared
+  // with the video track's own time axis (dragged directly on TimelineTrack) ──
   const captionKey = `captions:${id ?? ''}`
   const [textSlots, setTextSlots] = useState<TextSlot[]>(() => {
     try { return JSON.parse(localStorage.getItem(captionKey) ?? '[]') } catch { return [] }
@@ -44,10 +48,19 @@ export function EditorPage() {
     try { localStorage.setItem(captionKey, JSON.stringify(textSlots)) } catch {}
   }, [textSlots, captionKey])
 
-  // Stable (functional-update) callbacks so the memoized CaptionTrack only
+  // New text is dropped in at the active clip's own position on the shared
+  // timeline (or t=0 if nothing's selected) so it starts out roughly where
+  // the user's looking, ready to be dragged into its exact spot.
+  const activeClipStartRef = useRef(0)
+
+  // Stable (functional-update) callbacks so the memoized TimelineTrack only
   // re-renders when its slots actually change
-  const addTextSlot = useCallback((style: TextSlot['style'], text = '') => {
-    setTextSlots((prev) => [...prev, { id: crypto.randomUUID(), text, style }])
+  const addTextSlot = useCallback((style: TextSlot['style']) => {
+    setTextSlots((prev) => [...prev, {
+      id: crypto.randomUUID(), text: '', style,
+      startSecs: activeClipStartRef.current,
+      durationSecs: DEFAULT_TEXT_DURATION_SECS,
+    }])
   }, [])
 
   const updateTextSlot = useCallback((slotId: string, patch: Partial<TextSlot>) => {
@@ -58,21 +71,59 @@ export function EditorPage() {
     setTextSlots((prev) => prev.filter((s) => s.id !== slotId))
   }, [])
 
-  const moveTextSlot = useCallback((slotId: string, toIndex: number) => {
-    setTextSlots((prev) => {
-      const from = prev.findIndex((s) => s.id === slotId)
-      if (from === -1) return prev
-      const next = [...prev]
-      const [item] = next.splice(from, 1)
-      next.splice(toIndex, 0, item)
-      return next
+  // ── Background music ────────────────────────────────────────────────────
+  const musicVolumeKey = `music-volume:${id ?? ''}`
+  const [musicTrack, setMusicTrack]   = useState<MusicTrack | null>(null)
+  const [musicVolume, setMusicVolume] = useState(() => {
+    const saved = parseFloat(localStorage.getItem(musicVolumeKey) ?? '0.5')
+    return isNaN(saved) ? 0.5 : saved
+  })
+  const musicPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!id) return
+    api.getMusic(id).then(setMusicTrack).catch(() => {})
+  }, [id])
+
+  useEffect(() => {
+    try { localStorage.setItem(musicVolumeKey, String(musicVolume)) } catch {}
+  }, [musicVolume, musicVolumeKey])
+
+  const handleUploadMusic = useCallback((file: File) => {
+    if (!id) return
+    api.uploadMusic(id, file).then(setMusicTrack).catch((e: any) => alert(e.message ?? 'Upload failed'))
+  }, [id])
+
+  const handleRemoveMusic = useCallback(() => {
+    if (!id) return
+    api.deleteMusic(id).then(() => setMusicTrack(null)).catch(() => {})
+  }, [id])
+
+  // Applies instantly to local state for responsive dragging, but debounces
+  // the network PATCH — a drag fires this on every mousemove tick, and the
+  // backend only needs the final resting position once the gesture settles.
+  const handleUpdateMusic = useCallback((patch: { startSecs?: number; trimStart?: number; trimEnd?: number }) => {
+    setMusicTrack((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        start_secs: patch.startSecs != null ? String(patch.startSecs) : prev.start_secs,
+        trim_start: patch.trimStart != null ? String(patch.trimStart) : prev.trim_start,
+        trim_end:   patch.trimEnd   != null ? String(patch.trimEnd)   : prev.trim_end,
+      }
     })
-  }, [])
+    if (!id) return
+    if (musicPatchTimer.current) clearTimeout(musicPatchTimer.current)
+    musicPatchTimer.current = setTimeout(() => {
+      api.updateMusic(id, patch).catch(() => {})
+    }, 300)
+  }, [id])
+
   const [libScene, setLibScene]       = useState('all')
   const [libSearch, setLibSearch]     = useState('')
   const [initDone, setInitDone]       = useState(false)
   const [showExport, setShowExport]   = useState(false)
-  const previewRef = useRef<{ togglePlay: () => void }>(null)
+  const previewRef = useRef<PreviewPlayerHandle>(null)
 
   // Load project + clips
   useEffect(() => {
@@ -106,7 +157,21 @@ export function EditorPage() {
   }, [initDone, timeline.slots.length])
 
   const activeSlot = timeline.slots.find((s) => s.id === activeId) ?? null
-  const { removeSlot, moveSlot, updateSlot, addClip } = timeline
+  const { removeSlot, moveSlot, updateSlot, updateColorAdjust, splitSlot, mergeSlots, addClip } = timeline
+
+  // The active clip's own start offset within the shared multi-track timeline
+  // (sum of effectiveDuration for every slot before it) — used both to seed
+  // new text at a sensible position and to let PreviewPlayer translate its
+  // single-clip playhead into the same absolute domain text/music live in.
+  const activeClipAbsoluteStart = useMemo(() => {
+    let acc = 0
+    for (const s of timeline.slots) {
+      if (s.id === activeId) break
+      acc += effectiveDuration(s)
+    }
+    return acc
+  }, [timeline.slots, activeId])
+  activeClipStartRef.current = activeClipAbsoluteStart
 
   // Stable handlers for the memoized TimelineTrack
   const handleSelect = useCallback((slotId: string) => {
@@ -118,20 +183,31 @@ export function EditorPage() {
     setActiveId((prev) => prev === slotId ? null : prev)
   }, [removeSlot])
 
+  // Splits the active slot into two clips at the preview player's current
+  // playhead position (the left half keeps the active slot's id, so
+  // selection stays put; the right half becomes a new independent clip).
+  // Selecting a clip always resets the preview to its start, so a user who
+  // clicks Split without first scrubbing/playing would otherwise hit the
+  // "too close to the edge" guard and get a silent no-op — fall back to the
+  // clip's midpoint in that case so Split always does something useful.
+  const handleSplit = useCallback(() => {
+    if (!activeId || !activeSlot) return
+    const effIn  = activeSlot.tcIn + activeSlot.trimStart
+    const effOut = activeSlot.tcOut - activeSlot.trimEnd
+    const MIN_SPLIT_SECS = 0.5
+    const raw = previewRef.current?.getCurrentTime()
+    const t = (raw == null || raw <= effIn + MIN_SPLIT_SECS || raw >= effOut - MIN_SPLIT_SECS)
+      ? (effIn + effOut) / 2
+      : raw
+    splitSlot(activeId, t, 'both')
+  }, [activeId, activeSlot, splitSlot])
+
   const allClipsRef = useRef(allClips)
   allClipsRef.current = allClips
   const handleDropClip = useCallback((clipId: string) => {
     const clip = allClipsRef.current.find((c) => c.id === clipId)
     if (clip) addClip(clip)
   }, [addClip])
-
-  const suggestedPlayer = useMemo(() => {
-    if (!activeSlot) return undefined
-    const clip = allClips.find((c) => c.id === activeSlot.clipId)
-    return clip?.players[0]
-      ? `#${clip.players[0].jersey} ${clip.players[0].name}`
-      : undefined
-  }, [activeSlot, allClips])
 
   // Keyboard shortcuts: Space = play/pause, Delete/Backspace = remove, ←/→ = step
   useEffect(() => {
@@ -158,11 +234,20 @@ export function EditorPage() {
         const idx = timeline.slots.findIndex((s) => s.id === activeId)
         if (idx >= 0 && idx < timeline.slots.length - 1) setActiveId(timeline.slots[idx + 1].id)
         else if (idx === -1 && timeline.slots.length > 0) setActiveId(timeline.slots[0].id)
+      } else if (e.key === 's' || e.key === 'S') {
+        e.preventDefault()
+        handleSplit()
+      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        e.preventDefault()
+        timeline.undo()
+      } else if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+        e.preventDefault()
+        timeline.redo()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [activeId, timeline.slots, timeline.removeSlot])
+  }, [activeId, timeline.slots, timeline.removeSlot, timeline.undo, timeline.redo, handleSplit])
 
   // Clip library filtered list (scene + player search)
   const libraryClips = useMemo(() => {
@@ -210,6 +295,22 @@ export function EditorPage() {
           </span>
         </div>
         <div style={styles.headerRight}>
+          <button
+            style={{ ...styles.undoBtn, opacity: timeline.canUndo ? 1 : 0.35, cursor: timeline.canUndo ? 'pointer' : 'not-allowed' }}
+            disabled={!timeline.canUndo}
+            onClick={timeline.undo}
+            title="Undo (Ctrl/Cmd+Z)"
+          >
+            ↺ Undo
+          </button>
+          <button
+            style={{ ...styles.undoBtn, opacity: timeline.canRedo ? 1 : 0.35, cursor: timeline.canRedo ? 'pointer' : 'not-allowed' }}
+            disabled={!timeline.canRedo}
+            onClick={timeline.redo}
+            title="Redo (Ctrl/Cmd+Shift+Z)"
+          >
+            ↻ Redo
+          </button>
           {timeline.slots.length > 0 && (
             <button style={styles.clearBtn} onClick={timeline.clearTimeline}>
               Clear timeline
@@ -234,27 +335,39 @@ export function EditorPage() {
 
         {/* Left: preview + timeline */}
         <div style={styles.leftCol}>
-          <PreviewPlayer ref={previewRef} clip={activeSlot} />
-
-          <TimelineTrack
-            slots={timeline.slots}
-            activeId={activeId}
-            effectiveDuration={timeline.effectiveDuration}
-            onSelect={handleSelect}
-            onRemove={handleRemove}
-            onMove={moveSlot}
-            onUpdate={updateSlot}
-            onDropClip={handleDropClip}
+          <PreviewPlayer
+            ref={previewRef}
+            clip={activeSlot}
+            textSlots={textSlots}
+            clipAbsoluteStart={activeClipAbsoluteStart}
           />
 
-          <CaptionTrack
-            slots={textSlots}
-            onAdd={addTextSlot}
-            onUpdate={updateTextSlot}
-            onRemove={removeTextSlot}
-            onMove={moveTextSlot}
-            suggestedPlayer={suggestedPlayer}
-          />
+          {id && (
+            <TimelineTrack
+              slots={timeline.slots}
+              activeId={activeId}
+              onSelect={handleSelect}
+              onRemove={handleRemove}
+              onMove={moveSlot}
+              onUpdate={updateSlot}
+              onUpdateColor={updateColorAdjust}
+              onSplit={handleSplit}
+              onMerge={mergeSlots}
+              onCheckpoint={timeline.checkpoint}
+              onDropClip={handleDropClip}
+              textSlots={textSlots}
+              onAddText={addTextSlot}
+              onUpdateText={updateTextSlot}
+              onRemoveText={removeTextSlot}
+              projectId={id}
+              music={musicTrack}
+              musicVolume={musicVolume}
+              onVolumeChange={setMusicVolume}
+              onUploadMusic={handleUploadMusic}
+              onRemoveMusic={handleRemoveMusic}
+              onUpdateMusic={handleUpdateMusic}
+            />
+          )}
         </div>
 
         {/* Right: clip library panel */}
@@ -347,6 +460,7 @@ export function EditorPage() {
           projectId={id}
           timeline={timeline.slots}
           captions={textSlots}
+          musicVolume={musicTrack ? musicVolume : undefined}
           totalDuration={timeline.totalDuration}
           onClose={() => setShowExport(false)}
         />
@@ -380,6 +494,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   projectName: { fontSize: 15, fontWeight: 700, color: '#d0d0f0' },
   duration: { fontSize: 12, color: '#505080' },
+  undoBtn: {
+    background: 'none', border: '1px solid #1e1e30', color: '#8080a0',
+    fontSize: 12, padding: '4px 10px', borderRadius: 5,
+  },
   clearBtn: {
     background: 'none', border: '1px solid #2a1a3a', color: '#806090',
     fontSize: 12, padding: '4px 10px', borderRadius: 5, cursor: 'pointer',

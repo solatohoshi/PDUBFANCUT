@@ -7,6 +7,7 @@ import { projectRoutes } from './routes/projects'
 import { fileRoutes } from './routes/files'
 import { exportRoutes } from './routes/exports'
 import { clipRoutes } from './routes/clips'
+import { musicRoutes } from './routes/music'
 
 const fastify = Fastify({ logger: { level: 'info' } })
 
@@ -23,6 +24,7 @@ async function main() {
       'Upload-Offset',
       'X-HTTP-Method-Override',
       'X-Requested-With',
+      'X-Filename',
     ],
     exposedHeaders: ['Location', 'Tus-Resumable', 'Upload-Offset', 'Upload-Length'],
     credentials: true,
@@ -35,6 +37,7 @@ async function main() {
   await fastify.register(fileRoutes, { prefix: '/api' })
   await fastify.register(exportRoutes, { prefix: '/api' })
   await fastify.register(clipRoutes,   { prefix: '/api' })
+  await fastify.register(musicRoutes,  { prefix: '/api' })
 
   fastify.get('/healthz', async () => ({ ok: true }))
 

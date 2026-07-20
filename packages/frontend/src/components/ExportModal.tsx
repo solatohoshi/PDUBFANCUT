@@ -63,11 +63,12 @@ interface Props {
   projectId: string
   timeline: TimelineClip[]
   captions: TextSlot[]
+  musicVolume?: number
   totalDuration: number
   onClose: () => void
 }
 
-export function ExportModal({ projectId, timeline, captions, totalDuration, onClose }: Props) {
+export function ExportModal({ projectId, timeline, captions, musicVolume, totalDuration, onClose }: Props) {
   const [step, setStep]           = useState<'preset' | 'rendering' | 'done' | 'share' | 'error'>('preset')
   const [preset, setPreset]       = useState<string | null>(null)
   const [exportId, setExportId]   = useState<string | null>(null)
@@ -116,6 +117,7 @@ export function ExportModal({ projectId, timeline, captions, totalDuration, onCl
         preset,
         timeline: timeline as object[],
         captions: captions as object[],
+        musicVolume,
       })
       setExportId(result.id)
       setStep('rendering')

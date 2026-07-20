@@ -1,8 +1,5 @@
 import fp from 'fastify-plugin'
-import { Pool, neonConfig } from '@neondatabase/serverless'
-import ws from 'ws'
-
-neonConfig.webSocketConstructor = ws
+import { Pool } from 'pg'
 
 declare module 'fastify' {
   interface FastifyInstance {

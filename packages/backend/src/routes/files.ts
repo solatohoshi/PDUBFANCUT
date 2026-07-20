@@ -1,9 +1,12 @@
 import type { FastifyInstance } from 'fastify'
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, GetObjectCommand, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { createReadStream, existsSync, mkdirSync } from 'node:fs'
+import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { randomUUID } from 'node:crypto'
+import { hasFFmpeg, generateClipThumbnail } from '../lib/ffmpeg'
 
 const R2_READY = !!(
   process.env.R2_ACCOUNT_ID &&
@@ -12,6 +15,39 @@ const R2_READY = !!(
 )
 const LOCAL_UPLOADS_DIR = join(tmpdir(), 'pdubfancut-uploads')
 const LOCAL_THUMBS_DIR  = join(LOCAL_UPLOADS_DIR, 'thumbs')
+const LOCAL_FRAMES_DIR  = join(LOCAL_THUMBS_DIR, 'frames')
+
+// Timeline filmstrip frames are requested at pixel-derived timestamps that
+// shift by fractions of a second on every re-render (zoom, trim-drag). Round
+// to this grid so nearby requests collapse onto the same cached frame instead
+// of triggering a fresh ffmpeg extraction (and a new browser fetch) each time.
+const FRAME_CACHE_GRANULARITY_SECS = 0.25
+
+function roundToGrid(t: number): number {
+  return Math.max(0, Math.round(t / FRAME_CACHE_GRANULARITY_SECS) * FRAME_CACHE_GRANULARITY_SECS)
+}
+
+// A busy timeline drag can fire off a dozen-plus uncached filmstrip requests
+// within the same second (one per thumbnail slot, across several clips). Each
+// spawns an ffmpeg process; letting them all run unbounded starves the CPU and
+// makes every one of them slower, which is the opposite of what the filmstrip
+// is for. Cap how many run at once and queue the rest.
+const MAX_CONCURRENT_FRAME_EXTRACTIONS = 3
+let activeFrameExtractions = 0
+const frameExtractionQueue: Array<() => void> = []
+
+async function withFrameExtractionSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeFrameExtractions >= MAX_CONCURRENT_FRAME_EXTRACTIONS) {
+    await new Promise<void>((resolve) => frameExtractionQueue.push(resolve))
+  }
+  activeFrameExtractions++
+  try {
+    return await fn()
+  } finally {
+    activeFrameExtractions--
+    frameExtractionQueue.shift()?.()
+  }
+}
 
 export async function fileRoutes(fastify: FastifyInstance) {
   mkdirSync(LOCAL_THUMBS_DIR, { recursive: true })
@@ -119,4 +155,89 @@ export async function fileRoutes(fastify: FastifyInstance) {
     }
     reply.header('Content-Type', 'image/jpeg').send(createReadStream(localPath))
   })
+
+  // Filmstrip frame thumbnails — a timeline clip block requests several of
+  // these (one per visible thumbnail slot) to render a real frame-by-frame
+  // filmstrip instead of one stretched static image. Generated on demand via
+  // ffmpeg and cached (by source file + rounded timestamp) since the same
+  // frame gets requested repeatedly across renders, zoom levels, and reloads.
+  fastify.get<{ Params: { id: string }; Querystring: { t?: string } }>(
+    '/source-files/:id/frame',
+    async (req, reply) => {
+      const raw = parseFloat(req.query.t ?? '0')
+      const t = roundToGrid(isNaN(raw) ? 0 : raw)
+
+      const result = await fastify.pg.query(
+        `SELECT s3_key FROM source_files WHERE id = $1`,
+        [req.params.id],
+      )
+      const file = result.rows[0]
+      if (!file?.s3_key) {
+        reply.status(404).send({ error: 'Source file not found' })
+        return
+      }
+
+      const cacheKey = `frames/${req.params.id}/${t.toFixed(2)}.jpg`
+
+      if (R2_READY) {
+        // Already cached from an earlier request — redirect, no ffmpeg needed.
+        try {
+          await s3.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET!, Key: cacheKey }))
+          const url = await getSignedUrl(
+            s3,
+            new GetObjectCommand({ Bucket: process.env.R2_BUCKET!, Key: cacheKey, ResponseContentType: 'image/jpeg' }),
+            { expiresIn: 3600 },
+          )
+          reply.redirect(302, url)
+          return
+        } catch {
+          // Not cached yet — fall through and generate it.
+        }
+
+        if (!await hasFFmpeg()) {
+          reply.status(503).send({ error: 'ffmpeg not available' })
+          return
+        }
+
+        const sourceUrl = await getSignedUrl(
+          s3,
+          new GetObjectCommand({ Bucket: process.env.R2_BUCKET!, Key: file.s3_key }),
+          { expiresIn: 300 },
+        )
+        const tmpPath = join(tmpdir(), `frame-${randomUUID()}.jpg`)
+        try {
+          await withFrameExtractionSlot(() => generateClipThumbnail(sourceUrl, t, tmpPath))
+          const buf = await readFile(tmpPath)
+          await s3.send(new PutObjectCommand({
+            Bucket: process.env.R2_BUCKET!, Key: cacheKey, Body: buf, ContentType: 'image/jpeg',
+          }))
+          reply.header('Content-Type', 'image/jpeg')
+            .header('Cache-Control', 'public, max-age=31536000, immutable')
+            .send(buf)
+        } finally {
+          await rm(tmpPath, { force: true }).catch(() => {})
+        }
+        return
+      }
+
+      // Local file store fallback
+      const localCachePath = join(LOCAL_FRAMES_DIR, req.params.id, `${t.toFixed(2)}.jpg`)
+      if (existsSync(localCachePath)) {
+        reply.header('Content-Type', 'image/jpeg')
+          .header('Cache-Control', 'public, max-age=31536000, immutable')
+          .send(createReadStream(localCachePath))
+        return
+      }
+      if (!await hasFFmpeg()) {
+        reply.status(503).send({ error: 'ffmpeg not available' })
+        return
+      }
+      const localVideoPath = join(LOCAL_UPLOADS_DIR, file.s3_key)
+      mkdirSync(join(LOCAL_FRAMES_DIR, req.params.id), { recursive: true })
+      await withFrameExtractionSlot(() => generateClipThumbnail(localVideoPath, t, localCachePath))
+      reply.header('Content-Type', 'image/jpeg')
+        .header('Cache-Control', 'public, max-age=31536000, immutable')
+        .send(createReadStream(localCachePath))
+    },
+  )
 }

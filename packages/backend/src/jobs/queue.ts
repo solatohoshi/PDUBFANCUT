@@ -14,7 +14,7 @@ const redisUrl = buildRedisUrl(process.env.REDIS_URL || 'redis://localhost:6379'
 export const connection = new IORedis(redisUrl, {
   maxRetriesPerRequest: null,
   tls: redisUrl.startsWith('rediss://') ? {} : undefined,
-})
+}) as any
 // Prevent unhandled 'error' events from crashing the process when Redis is unreachable.
 // The upload route already has a 5-second timeout around enqueueAnalysis().
 connection.on('error', () => {})

@@ -73,6 +73,17 @@ export interface Clip {
   created_at: string
 }
 
+export interface MusicTrack {
+  id: string
+  original_name: string
+  size_bytes: number | null
+  duration_secs: string | null
+  start_secs: string
+  trim_start: string
+  trim_end: string
+  created_at: string
+}
+
 export interface VideoExport {
   id: string
   project_id: string
@@ -96,7 +107,7 @@ export const api = {
   getProjectClips: (projectId: string) =>
     request<Clip[]>(`/projects/${projectId}/clips`),
 
-  createExport: (projectId: string, payload: { preset: string; timeline: object[]; captions?: object[] }) =>
+  createExport: (projectId: string, payload: { preset: string; timeline: object[]; captions?: object[]; musicVolume?: number }) =>
     request<VideoExport>(`/projects/${projectId}/exports`, {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -133,4 +144,33 @@ export const api = {
 
   reanalyze: (projectId: string) =>
     request<{ message: string }>(`/projects/${projectId}/reanalyze`, { method: 'POST', body: '{}' }),
+
+  getMusic: (projectId: string) => request<MusicTrack | null>(`/projects/${projectId}/music`),
+
+  // Raw-body upload — bypasses the JSON `request()` helper since this sends
+  // audio bytes directly (small files, no tus/resumability needed).
+  uploadMusic: async (projectId: string, file: File): Promise<MusicTrack> => {
+    const headers: Record<string, string> = {
+      'Content-Type': file.type || 'audio/mpeg',
+      'X-Filename': encodeURIComponent(file.name),
+    }
+    if (_authToken) headers['Authorization'] = `Bearer ${_authToken}`
+    const res = await fetch(`${BASE}/projects/${projectId}/music`, {
+      method: 'POST', headers, body: file,
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error((body as any).error ?? `HTTP ${res.status}`)
+    }
+    return res.json()
+  },
+
+  deleteMusic: (projectId: string) =>
+    request<void>(`/projects/${projectId}/music`, { method: 'DELETE' }),
+
+  updateMusic: (projectId: string, patch: { startSecs?: number; trimStart?: number; trimEnd?: number }) =>
+    request<MusicTrack>(`/projects/${projectId}/music`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
 }

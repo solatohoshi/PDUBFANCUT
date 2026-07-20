@@ -1,6 +1,5 @@
 import { Worker } from 'bullmq'
-import { Pool, neonConfig } from '@neondatabase/serverless'
-import ws from 'ws'
+import { Pool } from 'pg'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -16,7 +15,6 @@ import { analyzeVideoForClips } from '../lib/analyzeVideo'
 import { hasFFmpeg, ffprobe, generateClipThumbnail } from '../lib/ffmpeg'
 import { sendClipsReadyEmail } from '../lib/notify'
 
-neonConfig.webSocketConstructor = ws
 const dbPool = new Pool({ connectionString: process.env.DATABASE_URL! })
 const execFileAsync = promisify(execFile)
 

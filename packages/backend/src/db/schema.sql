@@ -113,6 +113,41 @@ CREATE TABLE IF NOT EXISTS exports (
   updated_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Background music track for a project's export mix. One row per project
+-- (a new upload replaces the previous one) — kept as its own table rather
+-- than columns on `projects` so it can be extended to multiple tracks later
+-- without another migration.
+CREATE TABLE IF NOT EXISTS project_music (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id    UUID NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+  s3_key        TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  size_bytes    BIGINT,
+  duration_secs NUMERIC(10,3),
+  -- Position on the shared editor timeline (same absolute-seconds domain as
+  -- the concatenated video output): start_secs is where playback begins,
+  -- trim_start/trim_end cut seconds off the front/back of the source file
+  -- itself — mirrors how video clips are trimmed, so the same drag-to-move/
+  -- drag-edge-to-trim interaction works for the music block too.
+  start_secs    NUMERIC(10,3) NOT NULL DEFAULT 0,
+  trim_start    NUMERIC(10,3) NOT NULL DEFAULT 0,
+  trim_end      NUMERIC(10,3) NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Add positioning columns to existing installations (idempotent)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'project_music' AND column_name = 'start_secs') THEN
+    ALTER TABLE project_music ADD COLUMN start_secs NUMERIC(10,3) NOT NULL DEFAULT 0;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'project_music' AND column_name = 'trim_start') THEN
+    ALTER TABLE project_music ADD COLUMN trim_start NUMERIC(10,3) NOT NULL DEFAULT 0;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'project_music' AND column_name = 'trim_end') THEN
+    ALTER TABLE project_music ADD COLUMN trim_end NUMERIC(10,3) NOT NULL DEFAULT 0;
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS exports_project_idx        ON exports(project_id);
 CREATE INDEX IF NOT EXISTS projects_user_id_idx      ON projects(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS projects_file_hash_idx    ON projects(file_hash) WHERE file_hash IS NOT NULL;
