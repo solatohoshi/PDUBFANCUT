@@ -5,7 +5,14 @@
   "scripts": {
     "dev": "concurrently \"npm run dev -w packages/backend\" \"npm run dev -w packages/frontend\"",
     "build": "npm run build -w packages/backend && npm run build -w packages/frontend",
-    "migrate": "npm run migrate -w packages/backend"
+    "worker": "npm run worker -w packages/backend",
+    "migrate": "npm run migrate -w packages/backend",
+    "eval": "npm run eval -w packages/backend --",
+    "eval:export": "npm run eval:export -w packages/backend --",
+    "test": "npm test -w packages/backend",
+    "test:eval": "npm run test:eval -w packages/backend",
+    "test:security": "npm run test:security -w packages/backend",
+    "test:ffmpeg": "npm run test:ffmpeg -w packages/backend"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "replace-with-stable-source-id",
+      "videoPath": "corpus/replace-with-your-licensed-video.mp4",
+      "license": {
+        "source": "Describe where the footage came from",
+        "terms": "Describe the permission or licence",
+        "confirmedBy": "Your name and confirmation date"
+      },
+      "events": [
+        {
+          "type": "goal",
+          "timestamp": 42.5,
+          "timecodeIn": 38.0,
+          "timecodeOut": 49.0
+        },
+        {
+          "type": "save",
+          "timestamp": 71.2,
+          "timecodeIn": 68.0,
+          "timecodeOut": 75.0
+        }
+      ]
+    }
+  ]
+}

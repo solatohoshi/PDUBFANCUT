@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_CLERK_PUBLISHABLE_KEY?: string
+  readonly VITE_DEV_BYPASS_AUTH?: string
 }
 
 interface ImportMeta {

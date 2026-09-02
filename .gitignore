@@ -1,5 +1,12 @@
 node_modules
 dist
+
+# Environment configuration can contain service credentials.
 .env
+.env.*
 *.env.local
 .DS_Store
+
+# Keep internal Markdown notes local; publish only the project overview.
+*.md
+!/README.md

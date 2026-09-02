@@ -1,5 +1,6 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
+import rateLimit from '@fastify/rate-limit'
 import { dbPlugin } from './plugins/db'
 import authPlugin from './plugins/auth'
 import { uploadRoutes } from './routes/upload'
@@ -9,7 +10,26 @@ import { exportRoutes } from './routes/exports'
 import { clipRoutes } from './routes/clips'
 import { musicRoutes } from './routes/music'
 
-const fastify = Fastify({ logger: { level: 'info' } })
+const fastify = Fastify({
+  logger: {
+    level: 'info',
+    redact: ['req.headers.authorization'],
+    serializers: {
+      // Media capabilities must be query parameters for native <video>/<img>
+      // elements. Strip every query string from request logs so those
+      // short-lived credentials are not copied into log storage.
+      req(req: any) {
+        return {
+          method: req.method,
+          url: String(req.url ?? '').split('?', 1)[0],
+          hostname: req.hostname,
+          remoteAddress: req.ip,
+          remotePort: req.socket?.remotePort,
+        }
+      },
+    },
+  },
+})
 
 async function main() {
   await fastify.register(cors, {
@@ -32,6 +52,12 @@ async function main() {
 
   await fastify.register(dbPlugin)
   await fastify.register(authPlugin)
+  await fastify.register(rateLimit, {
+    global: true,
+    max: 300,
+    timeWindow: '1 minute',
+    keyGenerator: (req) => req.userId ?? req.ip,
+  })
   await fastify.register(projectRoutes, { prefix: '/api' })
   await fastify.register(uploadRoutes, { prefix: '/api' })
   await fastify.register(fileRoutes, { prefix: '/api' })

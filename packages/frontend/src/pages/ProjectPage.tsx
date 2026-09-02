@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { ProjectDetail, Clip } from '../lib/api'
 import { ClipCard } from '../components/ClipCard'
+import { useMediaToken } from '../hooks/useMediaToken'
 
 const ALL_SCENES = [
   'goal', 'save', 'shot_on_goal', 'hit',
@@ -29,6 +30,7 @@ export function ProjectPage() {
   const [clips, setClips]       = useState<Clip[]>([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState<string | null>(null)
+  const { mediaToken, mediaTokenError } = useMediaToken(id)
   const [readyBanner, setReadyBanner] = useState(false)
   const prevStatus = useRef<string | null>(null)
 
@@ -70,8 +72,13 @@ export function ProjectPage() {
 
   useEffect(() => {
     setLoading(true)
-    loadData()?.finally(() => setLoading(false))
+    if (!id) return
+    Promise.resolve(loadData()).finally(() => setLoading(false))
   }, [id])
+
+  useEffect(() => {
+    if (mediaTokenError) setError(mediaTokenError)
+  }, [mediaTokenError])
 
   // Auto-refresh while uploading or processing
   useEffect(() => {
@@ -406,6 +413,7 @@ export function ProjectPage() {
                 onToggle={toggleClip}
                 onConfirm={confirmClip}
                 onDismiss={dismissClip}
+                mediaToken={mediaToken}
               />
             ))}
           </div>

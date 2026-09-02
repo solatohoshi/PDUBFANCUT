@@ -11,6 +11,33 @@ export interface AnalyzedClip {
   confidence: number
 }
 
+export interface AnalysisUsage {
+  inputTokens: number
+  outputTokens: number
+  estimatedCostUsd: number
+  framesAnalyzed: number
+}
+
+export interface AnalysisResult {
+  clips: AnalyzedClip[]
+  usage: AnalysisUsage
+}
+
+export const ANALYSIS_MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8'
+export const PIPELINE_VERSION = process.env.ANALYSIS_PIPELINE_VERSION || 'frames-v1'
+export const PROMPT_VERSION = process.env.ANALYSIS_PROMPT_VERSION || 'pwhl-events-v1'
+
+function modelRates(model: string): { input: number; output: number } {
+  const configuredInput = Number(process.env.ANTHROPIC_INPUT_USD_PER_MTOK)
+  const configuredOutput = Number(process.env.ANTHROPIC_OUTPUT_USD_PER_MTOK)
+  if (Number.isFinite(configuredInput) && Number.isFinite(configuredOutput)) {
+    return { input: configuredInput, output: configuredOutput }
+  }
+  if (model.includes('haiku')) return { input: 1, output: 5 }
+  if (model.includes('sonnet')) return { input: 3, output: 15 }
+  return { input: 5, output: 25 }
+}
+
 const CLIP_SCHEMA = {
   type: 'object' as const,
   required: ['clips'],
@@ -57,7 +84,7 @@ export async function analyzeVideoForClips(
     | { type: 'url';  url: string }
     | { type: 'file'; path: string; mimeType?: string },
   durationSecs?: number,
-): Promise<AnalyzedClip[]> {
+): Promise<AnalysisResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
 
@@ -107,8 +134,8 @@ If the entire video is a single play, return it as one clip covering 0.0 to the 
     })
 
     const response = await client.messages.create({
-      model: 'claude-opus-4-8',
-      max_tokens: 8192,
+      model: ANALYSIS_MODEL,
+      max_tokens: Number.parseInt(process.env.ANALYSIS_MAX_TOKENS ?? '4096', 10),
       tools: [{
         name: 'report_clips',
         description: 'Report all key hockey moments identified in the video',
@@ -122,7 +149,17 @@ If the entire video is a single play, return it as one clip covering 0.0 to the 
     if (!toolBlock) throw new Error('Claude returned no tool call — no clips extracted')
 
     const { clips } = toolBlock.input as { clips: AnalyzedClip[] }
-    return Array.isArray(clips) ? clips : []
+    const inputTokens = response.usage.input_tokens
+      + (response.usage.cache_creation_input_tokens ?? 0)
+      + (response.usage.cache_read_input_tokens ?? 0)
+    const outputTokens = response.usage.output_tokens
+    const rates = modelRates(ANALYSIS_MODEL)
+    const estimatedCostUsd = (inputTokens * rates.input + outputTokens * rates.output) / 1_000_000
+
+    return {
+      clips: Array.isArray(clips) ? clips : [],
+      usage: { inputTokens, outputTokens, estimatedCostUsd, framesAnalyzed: frames.length },
+    }
   } finally {
     await rm(dirname(frames[0].path), { recursive: true, force: true }).catch(() => {})
   }

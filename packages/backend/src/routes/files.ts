@@ -7,10 +7,13 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { hasFFmpeg, generateClipThumbnail } from '../lib/ffmpeg'
+import { requireSourceFileOwner, requireThumbnailOwner } from '../lib/ownership'
+import { idParams } from '../lib/schemas'
 
 const R2_READY = !!(
   process.env.R2_ACCOUNT_ID &&
   process.env.R2_ACCESS_KEY_ID &&
+  process.env.R2_SECRET_ACCESS_KEY &&
   process.env.R2_BUCKET
 )
 const LOCAL_UPLOADS_DIR = join(tmpdir(), 'pdubfancut-uploads')
@@ -65,7 +68,11 @@ export async function fileRoutes(fastify: FastifyInstance) {
   // Serve a source file so the browser <video> can seek.
   // R2 mode: redirect to a presigned URL (browser streams directly, full Range support).
   // Local mode: stream the file from disk.
-  fastify.get<{ Params: { id: string } }>('/files/:id/stream', async (req, reply) => {
+  fastify.get<{ Params: { id: string } }>('/files/:id/stream', {
+    schema: { params: idParams() },
+    preHandler: requireSourceFileOwner(),
+    config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const result = await fastify.pg.query(
       `SELECT s3_key, original_name, size_bytes FROM source_files WHERE id = $1`,
       [req.params.id],
@@ -88,7 +95,7 @@ export async function fileRoutes(fastify: FastifyInstance) {
         }),
         { expiresIn: 3600 },
       )
-      reply.redirect(302, url)
+      reply.redirect(url, 302)
       return
     }
 
@@ -130,7 +137,16 @@ export async function fileRoutes(fastify: FastifyInstance) {
 
   // Serve clip thumbnails — key is stored in clips.thumb_key, e.g. "thumb-<clipId>.jpg".
   // ClipCard requests /api/files/<thumb_key> which maps here.
-  fastify.get<{ Params: { key: string } }>('/files/:key', async (req, reply) => {
+  fastify.get<{ Params: { key: string } }>('/files/:key', {
+    schema: {
+      params: {
+        type: 'object', additionalProperties: false, required: ['key'],
+        properties: { key: { type: 'string', pattern: '^thumb-[0-9a-fA-F-]{36}\\.jpg$' } },
+      },
+    },
+    preHandler: requireThumbnailOwner(),
+    config: { rateLimit: { max: 180, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const key = req.params.key
 
     if (R2_READY) {
@@ -144,7 +160,7 @@ export async function fileRoutes(fastify: FastifyInstance) {
         }),
         { expiresIn: 3600 },
       )
-      reply.redirect(302, url)
+      reply.redirect(url, 302)
       return
     }
 
@@ -163,6 +179,20 @@ export async function fileRoutes(fastify: FastifyInstance) {
   // frame gets requested repeatedly across renders, zoom levels, and reloads.
   fastify.get<{ Params: { id: string }; Querystring: { t?: string } }>(
     '/source-files/:id/frame',
+    {
+      schema: {
+        params: idParams(),
+        querystring: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            t: { type: 'string', pattern: '^[0-9]+(?:\\.[0-9]{1,3})?$' },
+            token: { type: 'string', minLength: 20, maxLength: 2048 },
+          },
+        },
+      },
+      preHandler: requireSourceFileOwner(),
+      config: { rateLimit: { max: 180, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const raw = parseFloat(req.query.t ?? '0')
       const t = roundToGrid(isNaN(raw) ? 0 : raw)
@@ -188,7 +218,7 @@ export async function fileRoutes(fastify: FastifyInstance) {
             new GetObjectCommand({ Bucket: process.env.R2_BUCKET!, Key: cacheKey, ResponseContentType: 'image/jpeg' }),
             { expiresIn: 3600 },
           )
-          reply.redirect(302, url)
+          reply.redirect(url, 302)
           return
         } catch {
           // Not cached yet — fall through and generate it.

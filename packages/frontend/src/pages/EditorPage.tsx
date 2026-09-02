@@ -10,6 +10,7 @@ import { TimelineTrack } from '../components/timeline/TimelineTrack'
 import { ExportModal } from '../components/ExportModal'
 import type { TextSlot } from '../components/timeline/CaptionTrack'
 import type { MusicTrack } from '../lib/api'
+import { useMediaToken } from '../hooks/useMediaToken'
 
 const DEFAULT_TEXT_DURATION_SECS = 3
 
@@ -33,6 +34,7 @@ export function EditorPage() {
   const [allClips, setAllClips] = useState<Clip[]>([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState<string | null>(null)
+  const { mediaToken, mediaTokenError } = useMediaToken(id)
 
   const timeline = useTimeline(id ?? '')
   const [activeId, setActiveId]       = useState<string | null>(null)
@@ -137,6 +139,10 @@ export function EditorPage() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
   }, [id])
+
+  useEffect(() => {
+    if (mediaTokenError) setError(mediaTokenError)
+  }, [mediaTokenError])
 
   // Add any clips passed from the clip browser (one-time on mount)
   useEffect(() => {
@@ -340,6 +346,7 @@ export function EditorPage() {
             clip={activeSlot}
             textSlots={textSlots}
             clipAbsoluteStart={activeClipAbsoluteStart}
+            mediaToken={mediaToken}
           />
 
           {id && (
@@ -360,6 +367,7 @@ export function EditorPage() {
               onUpdateText={updateTextSlot}
               onRemoveText={removeTextSlot}
               projectId={id}
+              mediaToken={mediaToken}
               music={musicTrack}
               musicVolume={musicVolume}
               onVolumeChange={setMusicVolume}
@@ -463,6 +471,7 @@ export function EditorPage() {
           musicVolume={musicTrack ? musicVolume : undefined}
           totalDuration={timeline.totalDuration}
           onClose={() => setShowExport(false)}
+          mediaToken={mediaToken}
         />
       )}
     </div>

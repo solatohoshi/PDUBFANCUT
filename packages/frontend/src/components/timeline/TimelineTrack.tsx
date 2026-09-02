@@ -3,7 +3,7 @@ import type { TimelineClip, ColorAdjust } from '../../hooks/useTimeline'
 import { canMerge, isDefaultColorAdjust, MIN_SPEED, MAX_SPEED } from '../../hooks/useTimeline'
 import type { TextSlot } from './CaptionTrack'
 import { STYLE_COLOR, STYLE_LABEL } from './CaptionTrack'
-import type { MusicTrack } from '../../lib/api'
+import { mediaUrl, type MusicTrack } from '../../lib/api'
 
 function formatTC(secs: number): string {
   const m = Math.floor(secs / 60)
@@ -238,6 +238,7 @@ interface Props {
 
   // ── Background music — same shared timeline ──────────────────────────────
   projectId:         string
+  mediaToken?:       string | null
   music:             MusicTrack | null
   musicVolume:       number
   onVolumeChange:    (v: number) => void
@@ -251,7 +252,7 @@ interface Props {
 export const TimelineTrack = memo(function TimelineTrack({
   slots, activeId, onSelect, onRemove, onMove, onUpdate, onUpdateColor, onSplit, onMerge, onCheckpoint, onDropClip,
   textSlots, onAddText, onUpdateText, onRemoveText,
-  projectId, music, musicVolume, onVolumeChange, onUploadMusic, onRemoveMusic, onUpdateMusic,
+  projectId, mediaToken, music, musicVolume, onVolumeChange, onUploadMusic, onRemoveMusic, onUpdateMusic,
 }: Props) {
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [overIndex, setOverIndex]   = useState<number | null>(null)
@@ -573,7 +574,7 @@ export const TimelineTrack = memo(function TimelineTrack({
                 />
                 <span style={styles.volumePct}>{Math.round(musicVolume * 100)}%</span>
               </label>
-              <audio controls src={`/api/projects/${projectId}/music/stream`} style={styles.audioEl} />
+              <audio controls src={mediaUrl(`/api/projects/${projectId}/music/stream`, mediaToken)} style={styles.audioEl} />
               <button style={styles.musicRemoveBtn} onClick={onRemoveMusic} title="Remove music">×</button>
             </div>
           ) : (
@@ -764,7 +765,7 @@ export const TimelineTrack = memo(function TimelineTrack({
                         {times.map((t, i) => (
                           <img
                             key={i}
-                            src={`/api/source-files/${slot.sourceFileId}/frame?t=${t.toFixed(2)}`}
+                            src={mediaUrl(`/api/source-files/${slot.sourceFileId}/frame?t=${t.toFixed(2)}`, mediaToken)}
                             alt=""
                             draggable={false}
                             loading="lazy"

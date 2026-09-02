@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, type ReactNode } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
 import { HomePage } from './pages/HomePage'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -14,7 +14,7 @@ function RouteFallback() {
   return <div style={styles.fallback}>Loading…</div>
 }
 
-export function App() {
+export function App({ accountControl }: { accountControl?: ReactNode }) {
   const navigate = useNavigate()
 
   return (
@@ -23,6 +23,7 @@ export function App() {
         <span style={styles.logo} onClick={() => navigate('/')}>
           PWHL Clip Studio
         </span>
+        {accountControl}
       </header>
 
       <ErrorBoundary>

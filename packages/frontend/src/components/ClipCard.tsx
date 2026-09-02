@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import type { Clip } from '../lib/api'
+import { mediaUrl, type Clip } from '../lib/api'
 
 const SCENE_COLOR: Record<string, string> = {
   goal:         '#f0c020',
@@ -83,11 +83,12 @@ interface Props {
   onToggle: (clipId: string) => void
   onConfirm?: (clipId: string) => void
   onDismiss?: (clipId: string) => void
+  mediaToken?: string | null
 }
 
 // Memoized: with stable callbacks from the parent, only the cards whose clip
 // or selection actually changed re-render (the grid can hold hundreds).
-export const ClipCard = memo(function ClipCard({ clip, selected, onToggle, onConfirm, onDismiss }: Props) {
+export const ClipCard = memo(function ClipCard({ clip, selected, onToggle, onConfirm, onDismiss, mediaToken }: Props) {
   const tcIn  = parseFloat(clip.timecode_in)
   const tcOut = parseFloat(clip.timecode_out)
   const dur   = Math.round(tcOut - tcIn)
@@ -96,7 +97,7 @@ export const ClipCard = memo(function ClipCard({ clip, selected, onToggle, onCon
   const primaryTag   = clip.scene_tags[0]
   const primaryColor = primaryTag ? (SCENE_COLOR[primaryTag.tag] ?? '#6c63ff') : '#6c63ff'
   const thumbSrc = clip.thumb_key
-    ? `/api/files/${clip.thumb_key}`
+    ? mediaUrl(`/api/files/${clip.thumb_key}`, mediaToken)
     : makeThumbnail(primaryTag?.tag ?? '', primaryColor, dur)
 
   return (

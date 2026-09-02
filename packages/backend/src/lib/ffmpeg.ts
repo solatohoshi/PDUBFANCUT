@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify }       from 'node:util'
 import { tmpdir }          from 'node:os'
 import { join }            from 'node:path'
-import { rm, mkdtemp, readdir, writeFile } from 'node:fs/promises'
+import { rm, mkdtemp, readdir, stat, writeFile } from 'node:fs/promises'
 import { createReadStream, existsSync } from 'node:fs'
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
 
@@ -43,6 +43,19 @@ export interface TimelineSlotForRender {
   trimEnd?:   number
   speed?:     number
   colorAdjust?: ColorAdjust
+}
+
+/** Remove query strings from URLs before an ffmpeg error reaches logs or the
+ * database. R2 presigned query parameters are temporary bearer credentials. */
+export function redactSignedUrls(value: string): string {
+  return value.replace(/https?:\/\/[^\s'"<>]+/g, (rawUrl) => {
+    try {
+      const url = new URL(rawUrl)
+      return url.search ? `${url.origin}${url.pathname}?<redacted>` : rawUrl
+    } catch {
+      return '<redacted-url>'
+    }
+  })
 }
 
 /**
@@ -358,20 +371,47 @@ export async function generateClipThumbnail(
   timeSecs: number,
   outputPath: string,
 ): Promise<void> {
-  // Use slow seek (-ss after -i) so seeking past EOF just returns the last frame.
-  await execFileAsync(
-    FFMPEG_BIN,
-    [
-      '-y',
-      '-i', videoSource,
-      '-ss', timeSecs.toFixed(3),
-      '-vframes', '1',
-      '-q:v', '3',
-      '-vf', 'scale=480:-2,format=yuvj420p',
-      outputPath,
-    ],
-    { timeout: 60_000 },
-  )
+  await rm(outputPath, { force: true }).catch(() => {})
+  try {
+    await execFileAsync(
+      FFMPEG_BIN,
+      buildThumbnailArgs(videoSource, timeSecs, outputPath),
+      { timeout: 30_000, maxBuffer: 1024 * 1024 },
+    )
+  } catch (err: any) {
+    const reason = err?.killed
+      ? 'ffmpeg timed out after 30 seconds'
+      : String(err?.stderr || err?.message || 'unknown ffmpeg error').trim().slice(-2000)
+    throw new Error(`Thumbnail extraction failed: ${redactSignedUrls(reason)}`)
+  }
+
+  const output = await stat(outputPath).catch(() => null)
+  if (!output?.isFile() || output.size === 0) {
+    await rm(outputPath, { force: true }).catch(() => {})
+    throw new Error(`Thumbnail extraction produced no frame at ${Math.max(0, timeSecs).toFixed(3)}s`)
+  }
+}
+
+export function buildThumbnailArgs(
+  videoSource: string,
+  timeSecs: number,
+  outputPath: string,
+): string[] {
+  return [
+    '-y',
+    '-nostdin',
+    '-loglevel', 'error',
+    // Input seeking avoids downloading/decoding the entire remote video up to
+    // the thumbnail timestamp. FFmpeg still decodes forward from the nearest
+    // keyframe when transcoding, which is accurate enough for a thumbnail.
+    '-ss', Math.max(0, timeSecs).toFixed(3),
+    '-i', videoSource,
+    '-frames:v', '1',
+    '-an',
+    '-q:v', '3',
+    '-vf', 'scale=480:-2',
+    outputPath,
+  ]
 }
 
 export interface ExtractedFrame {

@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Detected moments written by the AI pipeline (or stubs during development).
+-- Detected moments written by a versioned AI pipeline run.
 CREATE TABLE IF NOT EXISTS clips (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id      UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS clips (
   timecode_in     NUMERIC(10,3) NOT NULL,   -- seconds from start of video
   timecode_out    NUMERIC(10,3) NOT NULL,
   scene_tags      JSONB NOT NULL DEFAULT '[]', -- [{tag,confidence}]
-  players         JSONB NOT NULL DEFAULT '[]', -- [{jersey,name,team}] stub-ready
+  players         JSONB NOT NULL DEFAULT '[]', -- [{jersey,name,team}]
   confidence      NUMERIC(4,3) NOT NULL CHECK (confidence BETWEEN 0 AND 1),
   thumb_key       TEXT,                     -- R2 key for 1-second GIF thumbnail
   review_status   TEXT NOT NULL DEFAULT 'auto'
@@ -104,14 +104,25 @@ CREATE TABLE IF NOT EXISTS exports (
   project_id    UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   preset        TEXT NOT NULL CHECK (preset IN ('tiktok', 'twitter', 'instagram', 'fullres')),
   timeline      JSONB NOT NULL,           -- TimelineClip[] snapshot
-  status        TEXT NOT NULL DEFAULT 'rendering'
-                  CHECK (status IN ('rendering', 'done', 'failed')),
+  status        TEXT NOT NULL DEFAULT 'queued'
+                  CHECK (status IN ('queued', 'rendering', 'done', 'failed')),
+  bullmq_id     TEXT,
   output_key    TEXT,                     -- R2 object key once rendered
   duration_secs NUMERIC(10,3),
   error         TEXT,
   created_at    TIMESTAMPTZ DEFAULT NOW(),
   updated_at    TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Upgrade older export tables that predate queued-only rendering.
+ALTER TABLE exports DROP CONSTRAINT IF EXISTS exports_status_check;
+ALTER TABLE exports ADD CONSTRAINT exports_status_check
+  CHECK (status IN ('queued', 'rendering', 'done', 'failed'));
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'exports' AND column_name = 'bullmq_id') THEN
+    ALTER TABLE exports ADD COLUMN bullmq_id TEXT;
+  END IF;
+END $$;
 
 -- Background music track for a project's export mix. One row per project
 -- (a new upload replaces the previous one) — kept as its own table rather
@@ -148,6 +159,67 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- A versioned record of every real model invocation pipeline run. Metrics are
+-- recorded from provider usage responses rather than inferred from file size.
+CREATE TABLE IF NOT EXISTS analysis_runs (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id          UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_file_id      UUID NOT NULL REFERENCES source_files(id) ON DELETE CASCADE,
+  status              TEXT NOT NULL DEFAULT 'queued'
+                        CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+  pipeline_version    TEXT NOT NULL,
+  provider            TEXT NOT NULL,
+  model               TEXT NOT NULL,
+  prompt_version      TEXT NOT NULL,
+  parameters          JSONB NOT NULL DEFAULT '{}',
+  input_tokens        BIGINT NOT NULL DEFAULT 0,
+  output_tokens       BIGINT NOT NULL DEFAULT 0,
+  estimated_cost_usd  NUMERIC(12,6) NOT NULL DEFAULT 0,
+  processing_ms       BIGINT,
+  error               TEXT,
+  started_at          TIMESTAMPTZ,
+  completed_at        TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS detections (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  analysis_run_id UUID NOT NULL REFERENCES analysis_runs(id) ON DELETE CASCADE,
+  project_id      UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_file_id  UUID NOT NULL REFERENCES source_files(id) ON DELETE CASCADE,
+  clip_id         UUID REFERENCES clips(id) ON DELETE SET NULL,
+  event_type      TEXT NOT NULL,
+  timecode_in     NUMERIC(10,3) NOT NULL,
+  timecode_out    NUMERIC(10,3) NOT NULL,
+  confidence      NUMERIC(4,3) NOT NULL CHECK (confidence BETWEEN 0 AND 1),
+  chunk_index     INT,
+  raw_payload     JSONB NOT NULL DEFAULT '{}',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS training_examples (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id      UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_file_id  UUID NOT NULL REFERENCES source_files(id) ON DELETE CASCADE,
+  clip_id         UUID UNIQUE REFERENCES clips(id) ON DELETE CASCADE,
+  analysis_run_id UUID REFERENCES analysis_runs(id) ON DELETE SET NULL,
+  event_type      TEXT NOT NULL,
+  is_positive     BOOLEAN NOT NULL,
+  timecode_in     NUMERIC(10,3) NOT NULL,
+  timecode_out    NUMERIC(10,3) NOT NULL,
+  source          TEXT NOT NULL CHECK (source IN ('review_queue', 'eval_corpus', 'import')),
+  created_by      TEXT,
+  metadata        JSONB NOT NULL DEFAULT '{}',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'clips' AND column_name = 'analysis_run_id') THEN
+    ALTER TABLE clips ADD COLUMN analysis_run_id UUID REFERENCES analysis_runs(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS exports_project_idx        ON exports(project_id);
 CREATE INDEX IF NOT EXISTS projects_user_id_idx      ON projects(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS projects_file_hash_idx    ON projects(file_hash) WHERE file_hash IS NOT NULL;
@@ -157,3 +229,9 @@ CREATE INDEX IF NOT EXISTS clips_project_idx         ON clips(project_id);
 CREATE INDEX IF NOT EXISTS clips_source_file_idx     ON clips(source_file_id);
 CREATE INDEX IF NOT EXISTS clips_confidence_idx      ON clips(confidence);
 CREATE INDEX IF NOT EXISTS clips_review_status_idx   ON clips(review_status);
+CREATE INDEX IF NOT EXISTS clips_analysis_run_idx    ON clips(analysis_run_id);
+CREATE INDEX IF NOT EXISTS analysis_runs_project_idx ON analysis_runs(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS analysis_runs_source_idx  ON analysis_runs(source_file_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS detections_run_idx        ON detections(analysis_run_id);
+CREATE INDEX IF NOT EXISTS detections_event_idx      ON detections(event_type, source_file_id);
+CREATE INDEX IF NOT EXISTS training_examples_event_idx ON training_examples(event_type, is_positive);

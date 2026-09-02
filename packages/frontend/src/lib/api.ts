@@ -1,19 +1,33 @@
 const BASE = '/api'
 
-let _authToken: string | null = null
-export function setAuthToken(token: string | null) { _authToken = token }
+let _authTokenProvider: (() => Promise<string | null>) | null = null
+export function setAuthTokenProvider(provider: (() => Promise<string | null>) | null) {
+  _authTokenProvider = provider
+}
+
+async function authorizationHeaders(): Promise<Record<string, string>> {
+  const token = await _authTokenProvider?.()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+export function mediaUrl(path: string, token: string | null | undefined): string {
+  if (!token) return path
+  const separator = path.includes('?') ? '&' : '?'
+  return `${path}${separator}token=${encodeURIComponent(token)}`
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(init?.headers as Record<string, string> | undefined),
   }
-  if (_authToken) headers['Authorization'] = `Bearer ${_authToken}`
+  Object.assign(headers, await authorizationHeaders())
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error((body as any).error ?? `HTTP ${res.status}`)
   }
+  if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }
 
@@ -88,7 +102,7 @@ export interface VideoExport {
   id: string
   project_id: string
   preset: 'tiktok' | 'twitter' | 'instagram' | 'fullres'
-  status: 'rendering' | 'done' | 'failed'
+  status: 'queued' | 'rendering' | 'done' | 'failed'
   output_key: string | null
   duration_secs: string | null
   error: string | null
@@ -106,6 +120,16 @@ export const api = {
 
   getProjectClips: (projectId: string) =>
     request<Clip[]>(`/projects/${projectId}/clips`),
+
+  createUploadToken: (projectId: string) =>
+    request<{ token: string; expiresAt: string }>(`/projects/${projectId}/upload-token`, {
+      method: 'POST', body: '{}',
+    }),
+
+  createMediaToken: (projectId: string) =>
+    request<{ token: string; expiresAt: string }>(`/projects/${projectId}/media-token`, {
+      method: 'POST', body: '{}',
+    }),
 
   createExport: (projectId: string, payload: { preset: string; timeline: object[]; captions?: object[]; musicVolume?: number }) =>
     request<VideoExport>(`/projects/${projectId}/exports`, {
@@ -154,7 +178,7 @@ export const api = {
       'Content-Type': file.type || 'audio/mpeg',
       'X-Filename': encodeURIComponent(file.name),
     }
-    if (_authToken) headers['Authorization'] = `Bearer ${_authToken}`
+    Object.assign(headers, await authorizationHeaders())
     const res = await fetch(`${BASE}/projects/${projectId}/music`, {
       method: 'POST', headers, body: file,
     })

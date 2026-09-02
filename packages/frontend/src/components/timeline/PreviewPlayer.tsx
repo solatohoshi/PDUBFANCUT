@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, forwardRef, useImperativeHandle, memo } from 'react'
 import type { TimelineClip } from '../../hooks/useTimeline'
 import type { TextSlot } from './CaptionTrack'
+import { mediaUrl } from '../../lib/api'
 
 function formatTime(secs: number): string {
   const m = Math.floor(secs / 60)
@@ -22,6 +23,7 @@ interface Props {
    * preview translate its local playhead into the same absolute domain
    * textSlots are positioned in. */
   clipAbsoluteStart?: number
+  mediaToken?: string | null
 }
 
 // Memoized: re-renders when the active clip OR the text overlays change, but
@@ -71,7 +73,7 @@ const OVERLAY_LINE_STYLE: Record<TextSlot['style'], React.CSSProperties> = {
   },
 }
 
-export const PreviewPlayer = memo(forwardRef<PreviewPlayerHandle, Props>(function PreviewPlayer({ clip, textSlots = [], clipAbsoluteStart = 0 }, ref) {
+export const PreviewPlayer = memo(forwardRef<PreviewPlayerHandle, Props>(function PreviewPlayer({ clip, textSlots = [], clipAbsoluteStart = 0, mediaToken }, ref) {
   const videoRef   = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying]   = useState(false)
   const [current, setCurrent]   = useState(0)
@@ -207,7 +209,7 @@ export const PreviewPlayer = memo(forwardRef<PreviewPlayerHandle, Props>(functio
             <video
               key={`${clip.sourceFileId}:${clip.id}`}
               ref={videoRef}
-              src={`/api/files/${clip.sourceFileId}/stream`}
+              src={mediaUrl(`/api/files/${clip.sourceFileId}/stream`, mediaToken)}
               style={styles.video}
               preload="metadata"
               playsInline
@@ -224,7 +226,7 @@ export const PreviewPlayer = memo(forwardRef<PreviewPlayerHandle, Props>(functio
                 ) : clip.thumbKey ? (
                   <>
                     <img
-                      src={`/api/files/${clip.thumbKey}`}
+                      src={mediaUrl(`/api/files/${clip.thumbKey}`, mediaToken)}
                       style={styles.thumbImg}
                       alt=""
                       draggable={false}

@@ -45,6 +45,15 @@ export function useUpload() {
 
       setState((s) => ({ ...s, phase: 'uploading', projectId }))
 
+      let uploadCapability: { token: string; expiresAt: string }
+      try {
+        uploadCapability = await api.createUploadToken(projectId)
+      } catch (err: any) {
+        await api.deleteProject(projectId).catch(() => {})
+        setState((s) => ({ ...s, phase: 'error', error: err.message }))
+        return
+      }
+
       let lastBytes = 0
       let lastTime = Date.now()
       const capturedId = projectId
@@ -67,6 +76,11 @@ export function useUpload() {
           filename: file.name,
           filetype: file.type,
           projectid: capturedId,
+        },
+        async onBeforeRequest(request) {
+          const expiresSoon = new Date(uploadCapability.expiresAt).getTime() < Date.now() + 30_000
+          if (expiresSoon) uploadCapability = await api.createUploadToken(capturedId)
+          request.setHeader('Authorization', `Bearer ${uploadCapability.token}`)
         },
         onProgress(bytesUploaded, bytesTotal) {
           const now = Date.now()

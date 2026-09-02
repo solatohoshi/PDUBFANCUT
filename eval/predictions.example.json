@@ -1,0 +1,17 @@
+{
+  "runs": [
+    {
+      "sourceId": "replace-with-stable-source-id",
+      "processingMs": 12500,
+      "costUsd": 0.08,
+      "detections": [
+        {
+          "type": "goal",
+          "timecodeIn": 39.0,
+          "timecodeOut": 48.0,
+          "confidence": 0.91
+        }
+      ]
+    }
+  ]
+}

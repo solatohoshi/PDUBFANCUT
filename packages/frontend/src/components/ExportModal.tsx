@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { api } from '../lib/api'
+import { api, mediaUrl } from '../lib/api'
 import type { TimelineClip } from '../hooks/useTimeline'
 import type { TextSlot } from './timeline/CaptionTrack'
 
@@ -66,9 +66,10 @@ interface Props {
   musicVolume?: number
   totalDuration: number
   onClose: () => void
+  mediaToken?: string | null
 }
 
-export function ExportModal({ projectId, timeline, captions, musicVolume, totalDuration, onClose }: Props) {
+export function ExportModal({ projectId, timeline, captions, musicVolume, totalDuration, onClose, mediaToken }: Props) {
   const [step, setStep]           = useState<'preset' | 'rendering' | 'done' | 'share' | 'error'>('preset')
   const [preset, setPreset]       = useState<string | null>(null)
   const [exportId, setExportId]   = useState<string | null>(null)
@@ -129,7 +130,7 @@ export function ExportModal({ projectId, timeline, captions, musicVolume, totalD
 
   function copyLink() {
     if (!exportId) return
-    const url = `${window.location.origin}/api/exports/${exportId}/download`
+    const url = `${window.location.origin}${mediaUrl(`/api/exports/${exportId}/download`, mediaToken)}`
     navigator.clipboard.writeText(url).catch(() => {})
   }
 
@@ -218,7 +219,7 @@ export function ExportModal({ projectId, timeline, captions, musicVolume, totalD
               Rendering {selectedPreset?.label ?? preset} export…
             </p>
             <p style={styles.renderHint}>
-              In stub mode this completes in ~3–5 seconds. With real FFmpeg, this takes 1–3 minutes.
+              Your export is queued for the FFmpeg worker. You can leave this window open while it renders.
             </p>
             <div style={styles.progressBar}>
               <div
@@ -239,12 +240,11 @@ export function ExportModal({ projectId, timeline, captions, musicVolume, totalD
             <span style={styles.doneIcon}>✅</span>
             <p style={styles.doneTitle}>Export complete</p>
             <p style={styles.doneHint}>
-              Stub mode: the file record is created but no actual MP4 was rendered.
-              Wire up a cloud FFmpeg worker (Modal / RunPod) to enable real downloads.
+              The rendered MP4 is ready to download.
             </p>
             <div style={styles.doneActions}>
               <a
-                href={`/api/exports/${exportId}/download`}
+                href={mediaUrl(`/api/exports/${exportId}/download`, mediaToken)}
                 download
                 style={styles.downloadBtn}
               >
